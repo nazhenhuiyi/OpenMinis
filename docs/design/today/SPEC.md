@@ -65,8 +65,8 @@ Minis 现在的入口只有聊天，用户要"有事"才会打开。「今日」
 
 ### 2.2 输入栏
 
-- 一个圆角输入框，**相机按钮在框内右侧**，发送按钮在框外右侧
-- 输入框最多长到 6 行，再多就在框内滚动
+- 和聊天输入框同一套样式：一张圆角卡片，**文字在上，按钮行在卡片内的底部**——左下角是相机，右下角是发送
+- 为写长一点的内容设计：最多长到 10 行，再多就在框内滚动；回车是换行，只有点发送才会发送
 - 输入框为空且没有待发送的照片时，发送按钮置灰
 - 软键盘弹出时整个输入栏跟着上移（`imePadding()`），时间线保持贴底
 - **草稿**：切换 tab 或退出 App 都保留输入框内容，下次打开恢复
@@ -127,7 +127,7 @@ Minis 现在的入口只有聊天，用户要"有事"才会打开。「今日」
 
 - Linux 路径：`/var/minis/journal/YYYY/MM/YYYY-MM-DD.md`
 - 和 `memory`、`skills` 一样是全局目录，所有会话共享。Android 上实际存放在 `filesDir/minis-global/journal/`（和 `minis-global/memory/` 并列）
-- 对 agent **只读**挂载，在「共享文件夹」设置里新增一项（`ui/settings/SharedFoldersScreen.kt`）
+- 挂载给 agent：文件本身只读（`file_write` / `file_edit` 会拒绝），增删改一律通过 `journal` 工具（§9）；在「共享文件夹」设置里新增一项（`ui/settings/SharedFoldersScreen.kt`）
 - 每个自然日一个文件。日期按**写下这条时的本地时区**计算
 
 ### 4.2 格式
@@ -194,12 +194,12 @@ date: 2026-10-11
 
 | | memory | journal |
 |---|---|---|
-| 谁写 | agent（`memory_write`） | 用户 |
-| agent 权限 | 读写 | 只读 |
-| 内容 | agent 对用户的理解 | 用户自己的原话 |
+| 谁写 | agent（`memory_write`） | 主要是用户；用户让 agent 记的时候 agent 也能写 |
+| agent 权限 | 读写 | 读；写只能通过 `journal` 工具，并且只在用户要求时 |
+| 内容 | agent 对用户的理解 | 用户的生活记录 |
 | 路径 | `/var/minis/memory/` | `/var/minis/journal/` |
 
-agent 可以从 journal 里**提炼**内容写进 memory，但不能改 journal。
+**署名**：agent 新增或改过的条目带 `by=minis` 属性，时间线上那一行小字显示「Minis 写的」。用户之后在 App 里再改这一条，`by` 会被去掉——文字又是用户自己的了。
 
 ### 4.7 跨平台测试数据
 
@@ -386,13 +386,20 @@ journal 的恢复规则，按天逐个文件处理：
 
 ## 9. 和 agent 的关系（第一版范围）
 
-第一版只做两件事：
+1. **挂载** `/var/minis/journal/`，system prompt 里说明位置、格式，以及"改动请用 `journal` 工具"
+2. **`journal` 工具**（`tools/JournalTool.kt`），只给主 agent，子 agent 只能读文件：
 
-1. **只读挂载** `/var/minis/journal/`，并在 system prompt 里加一行说明：
-   > `/var/minis/journal/YYYY/MM/YYYY-MM-DD.md — The user's own journal (read-only). Each entry starts with "## HH:MM" followed by a "<!-- minis:entry ... -->" metadata line.`
-2. **"问问 Minis"**（§2.4）
+   | action | 参数 | 说明 |
+   |---|---|---|
+   | `list` | `date`（默认今天） | 返回当天每条的 id、时间、地点、照片、是否 Minis 写的、正文 |
+   | `add` | `content`，可选 `date` + `time` | 新增一条，标 `by=minis`；可以补记过去的时间（"把昨晚看电影记一下"），不能写未来 |
+   | `edit` | `id`、`content` | 按 id 在所有日期里找到并替换正文，补 `edited`，标 `by=minis` |
+   | `delete` | `id` | 删除这一条，照片留在相册 |
 
-这样用户在聊天里问"我上周都干了什么"，agent 用现有的文件工具就能读 journal。查照片则用已有的 `android-photos` 能力。
+   读写都走 `JournalStore`，所以 id、时间戳和元数据行一定是对的。工具说明里要求：只在用户要求或明确同意时写，保留用户的语气，不主动改写或删除用户的原话。
+3. **"问问 Minis"**（§2.4）
+
+这样用户在聊天里问"我上周都干了什么"，agent 读 journal 就能回答；说"帮我把今天的事记一下"，agent 用 `journal add` 写进去。查照片则用已有的 `android-photos` 能力。
 
 ## 10. Android 实现落点
 
@@ -441,7 +448,7 @@ M1 完成后就可以开始自己用了。
 
 **已知限制**
 
-1. **shell 里的写入没有硬性拦截**：agent 的 `file_write` / `file_edit` 会拒绝写 `/var/minis/journal`，system prompt 也写明了只读；但 PRoot 不支持只读挂载，shell 里用 `>` 重定向仍然能写。目前靠 system prompt 约束
+1. **shell 里的写入没有硬性拦截**：agent 的 `file_write` / `file_edit` 会拒绝直接写 `/var/minis/journal` 的文件并提示改用 `journal` 工具；但 PRoot 不支持只读挂载，shell 里用 `>` 重定向仍然能写。目前靠 system prompt 约束
 2. **FileObserver 不递归**：只监听当月和上月的目录。其他月份的外部修改，下次回到前台时会刷新
 3. **地名依赖系统 Geocoder**：没有 Google 服务或断网时不显示地名，不报错（模拟器上两种情况都实测过）
 4. **iOS 尚未支持 `journal` 备份类别**：iOS 恢复 Android 的备份时会跳过 journal（不会出错），需要按 §8.2 补上
