@@ -8,7 +8,6 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.consumeWindowInsets
@@ -534,9 +533,10 @@ fun AppNavigation(
     val currentRoute = currentEntry?.destination?.route
     val onToday = currentTab == com.openminis.app.ui.today.MainTabs.Tab.TODAY
     val chatAtRoot = (currentRoute == Routes.SESSION_LIST || currentRoute == Routes.CHAT) && chatListVisible
-    @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
-    val imeVisible = WindowInsets.isImeVisible
-    val showTabBar = !imeVisible && (onToday || chatAtRoot)
+    // The bar stays in the layout while the keyboard is up (the keyboard simply
+    // covers it). Hiding it on IME used to make the composer drop to the very
+    // bottom as the keyboard closed and then jump up when the bar came back.
+    val showTabBar = onToday || chatAtRoot
     // Anything that moves the NavHost off its root (deep link, notification,
     // share, a launch-mode resume, the user tapping into Settings) belongs to
     // the chat tab, so every existing entry point keeps landing where it did.
@@ -574,7 +574,13 @@ fun AppNavigation(
     androidx.compose.foundation.layout.Box(
         Modifier.weight(1f).fillMaxWidth().then(
             // The bar draws over the gesture area itself; content above must not pad for it again.
-            if (showTabBar) Modifier.consumeWindowInsets(WindowInsets.navigationBars) else Modifier,
+            // Content above the bar must not pad for the gesture area or for the
+            // bar again; consuming both also makes imePadding() below stop the
+            // composer exactly on top of the keyboard rather than a bar-height higher.
+            if (showTabBar) {
+                Modifier.consumeWindowInsets(WindowInsets.navigationBars)
+                    .consumeWindowInsets(androidx.compose.foundation.layout.PaddingValues(bottom = com.openminis.app.ui.today.MainTabs.BAR_HEIGHT))
+            } else Modifier,
         ),
     ) {
     androidx.compose.foundation.layout.Box(

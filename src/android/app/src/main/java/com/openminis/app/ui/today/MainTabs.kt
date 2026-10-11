@@ -68,13 +68,16 @@ object MainTabs {
     val chatListVisible = MutableStateFlow(true)
 
     fun select(t: Tab) { _tab.value = t }
+
+    /** Height of [MainTabBar] above the gesture area; content consumes it as an inset. */
+    val BAR_HEIGHT = 56.dp
 }
 
 /** Text-only tab bar: the selected tab is bold with a short underline, no icons. */
 @Composable
 fun MainTabBar(selected: MainTabs.Tab, onSelect: (MainTabs.Tab) -> Unit) {
     Surface(color = MaterialTheme.colorScheme.surface, tonalElevation = 3.dp) {
-        Row(Modifier.fillMaxWidth().navigationBarsPadding().height(56.dp).selectableGroup()) {
+        Row(Modifier.fillMaxWidth().navigationBarsPadding().height(MainTabs.BAR_HEIGHT).selectableGroup()) {
             TabLabel(stringResource(R.string.tab_today), selected == MainTabs.Tab.TODAY) { onSelect(MainTabs.Tab.TODAY) }
             TabLabel(stringResource(R.string.tab_chat), selected == MainTabs.Tab.CHAT) { onSelect(MainTabs.Tab.CHAT) }
         }
