@@ -1,0 +1,390 @@
+{
+  "_comment": "Shared journal codec vectors (docs/design/today/SPEC.md §4, §8.4). Android: JournalVectorsTest. iOS must pass the same file. Attributes are [key, value] pairs because order is part of the format.",
+  "parse": [
+    {
+      "name": "spec example: user heading inside a body is not a new entry",
+      "input": "---\ndate: 2026-10-11\n---\n\n## 09:32\n<!-- minis:entry id=01JA2K3M7ZQ8V5X4C3B2A1N0PR at=2026-10-11T09:32:15+08:00 lat=31.22345 lng=121.44567 acc=18 place=\"静安寺附近\" -->\n今天的咖啡有点酸。\n\n## 14:05\n<!-- minis:entry id=01JA2P9QK4M2N6B8V0C1X3Z5LT at=2026-10-11T14:05:02+08:00 edited=2026-10-11T14:07:40+08:00 -->\n终于把 v1.14 发出去了。\n\n## 这行是用户自己写的标题\n正文可以是任意 Markdown。\n",
+      "expect": {
+        "head": "---\ndate: 2026-10-11\n---\n\n",
+        "entries": [
+          {
+            "heading": "09:32",
+            "body": "今天的咖啡有点酸。",
+            "attrs": [
+              [
+                "id",
+                "01JA2K3M7ZQ8V5X4C3B2A1N0PR"
+              ],
+              [
+                "at",
+                "2026-10-11T09:32:15+08:00"
+              ],
+              [
+                "lat",
+                "31.22345"
+              ],
+              [
+                "lng",
+                "121.44567"
+              ],
+              [
+                "acc",
+                "18"
+              ],
+              [
+                "place",
+                "静安寺附近"
+              ]
+            ]
+          },
+          {
+            "heading": "14:05",
+            "body": "终于把 v1.14 发出去了。\n\n## 这行是用户自己写的标题\n正文可以是任意 Markdown。",
+            "attrs": [
+              [
+                "id",
+                "01JA2P9QK4M2N6B8V0C1X3Z5LT"
+              ],
+              [
+                "at",
+                "2026-10-11T14:05:02+08:00"
+              ],
+              [
+                "edited",
+                "2026-10-11T14:07:40+08:00"
+              ]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "no front matter, free preamble kept as head",
+      "input": "随便写的开头\n\n## 09:32\n<!-- minis:entry id=01JA2K3M7ZQ8V5X4C3B2A1N0PR at=2026-10-11T09:32:15+08:00 -->\n第一条\n",
+      "expect": {
+        "head": "随便写的开头\n\n",
+        "entries": [
+          {
+            "heading": "09:32",
+            "body": "第一条",
+            "attrs": [
+              [
+                "id",
+                "01JA2K3M7ZQ8V5X4C3B2A1N0PR"
+              ],
+              [
+                "at",
+                "2026-10-11T09:32:15+08:00"
+              ]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "CRLF line endings",
+      "input": "---\r\ndate: 2026-10-11\r\n---\r\n\r\n## 09:32\r\n<!-- minis:entry id=01JA2K3M7ZQ8V5X4C3B2A1N0PR at=2026-10-11T09:32:15+08:00 -->\r\n第一条\r\n",
+      "expect": {
+        "head": "---\r\ndate: 2026-10-11\r\n---\r\n\r\n",
+        "entries": [
+          {
+            "heading": "09:32",
+            "body": "第一条",
+            "attrs": [
+              [
+                "id",
+                "01JA2K3M7ZQ8V5X4C3B2A1N0PR"
+              ],
+              [
+                "at",
+                "2026-10-11T09:32:15+08:00"
+              ]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "escaped attribute values and escaped body marker",
+      "input": "## 09:32\n<!-- minis:entry id=X1 at=2026-10-11T09:32:15+08:00 place=\"A &quot;B&quot; &amp; C &#45;&#45; D\" -->\n&lt;!-- minis:entry 不是新的一条\n",
+      "expect": {
+        "head": "",
+        "entries": [
+          {
+            "heading": "09:32",
+            "body": "<!-- minis:entry 不是新的一条",
+            "attrs": [
+              [
+                "id",
+                "X1"
+              ],
+              [
+                "at",
+                "2026-10-11T09:32:15+08:00"
+              ],
+              [
+                "place",
+                "A \"B\" & C -- D"
+              ]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "unknown attributes are kept in order",
+      "input": "## 09:32\n<!-- minis:entry id=X1 mood=happy at=2026-10-11T09:32:15+08:00 weather=sunny -->\nx\n",
+      "expect": {
+        "head": "",
+        "entries": [
+          {
+            "heading": "09:32",
+            "body": "x",
+            "attrs": [
+              [
+                "id",
+                "X1"
+              ],
+              [
+                "mood",
+                "happy"
+              ],
+              [
+                "at",
+                "2026-10-11T09:32:15+08:00"
+              ],
+              [
+                "weather",
+                "sunny"
+              ]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "blank line between heading and marker: not an entry (stray marker)",
+      "input": "## 10:00\n\n<!-- minis:entry id=X1 at=2026-10-11T10:00:00+08:00 -->\nx\n",
+      "expect": {
+        "head": "## 10:00\n\n<!-- minis:entry id=X1 at=2026-10-11T10:00:00+08:00 -->\nx\n",
+        "entries": [],
+        "stray": 1
+      }
+    },
+    {
+      "name": "empty body",
+      "input": "## 09:32\n<!-- minis:entry id=X1 at=2026-10-11T09:32:15+08:00 -->\n",
+      "expect": {
+        "head": "",
+        "entries": [
+          {
+            "heading": "09:32",
+            "body": "",
+            "attrs": [
+              [
+                "id",
+                "X1"
+              ],
+              [
+                "at",
+                "2026-10-11T09:32:15+08:00"
+              ]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "empty file",
+      "input": "",
+      "expect": {
+        "head": "",
+        "entries": []
+      }
+    }
+  ],
+  "render": [
+    {
+      "name": "quoting rules",
+      "attrs": [
+        [
+          "id",
+          "X1"
+        ],
+        [
+          "at",
+          "2026-10-11T09:32:15+08:00"
+        ],
+        [
+          "place",
+          "静安寺附近"
+        ],
+        [
+          "photos",
+          "DCIM/Minis/a.jpg,DCIM/Minis/b.jpg"
+        ],
+        [
+          "note",
+          "say \"hi\" & -- bye"
+        ],
+        [
+          "lat",
+          "31.22345"
+        ]
+      ],
+      "expect": "id=X1 at=2026-10-11T09:32:15+08:00 place=\"静安寺附近\" photos=\"DCIM/Minis/a.jpg,DCIM/Minis/b.jpg\" note=\"say &quot;hi&quot; &amp; &#45;&#45; bye\" lat=31.22345"
+    }
+  ],
+  "edit": [
+    {
+      "name": "delete the middle entry, nothing else changes",
+      "input": "---\ndate: 2026-10-11\n---\n\n## 09:32\n<!-- minis:entry id=01JA2K3M7ZQ8V5X4C3B2A1N0PR at=2026-10-11T09:32:15+08:00 -->\n第一条\n\n## 14:05\n<!-- minis:entry id=01JA2P9QK4M2N6B8V0C1X3Z5LT at=2026-10-11T14:05:02+08:00 -->\n第二条\n\n## 16:20\n<!-- minis:entry id=01JA2TB7W1E3R5T7Y9U1I3O5PA at=2026-10-11T16:20:44+08:00 -->\n第三条\n",
+      "id": "01JA2P9QK4M2N6B8V0C1X3Z5LT",
+      "op": "delete",
+      "expect": "---\ndate: 2026-10-11\n---\n\n## 09:32\n<!-- minis:entry id=01JA2K3M7ZQ8V5X4C3B2A1N0PR at=2026-10-11T09:32:15+08:00 -->\n第一条\n\n## 16:20\n<!-- minis:entry id=01JA2TB7W1E3R5T7Y9U1I3O5PA at=2026-10-11T16:20:44+08:00 -->\n第三条\n"
+    },
+    {
+      "name": "replace a body keeps the separator",
+      "input": "---\ndate: 2026-10-11\n---\n\n## 09:32\n<!-- minis:entry id=01JA2K3M7ZQ8V5X4C3B2A1N0PR at=2026-10-11T09:32:15+08:00 -->\n第一条\n\n## 14:05\n<!-- minis:entry id=01JA2P9QK4M2N6B8V0C1X3Z5LT at=2026-10-11T14:05:02+08:00 -->\n第二条\n\n## 16:20\n<!-- minis:entry id=01JA2TB7W1E3R5T7Y9U1I3O5PA at=2026-10-11T16:20:44+08:00 -->\n第三条\n",
+      "id": "01JA2K3M7ZQ8V5X4C3B2A1N0PR",
+      "op": "replace",
+      "entry": {
+        "body": "第一条（改）",
+        "attrs": [
+          [
+            "id",
+            "01JA2K3M7ZQ8V5X4C3B2A1N0PR"
+          ],
+          [
+            "at",
+            "2026-10-11T09:32:15+08:00"
+          ],
+          [
+            "edited",
+            "2026-10-11T10:00:00+08:00"
+          ]
+        ]
+      },
+      "expect": "---\ndate: 2026-10-11\n---\n\n## 09:32\n<!-- minis:entry id=01JA2K3M7ZQ8V5X4C3B2A1N0PR at=2026-10-11T09:32:15+08:00 edited=2026-10-11T10:00:00+08:00 -->\n第一条（改）\n\n## 14:05\n<!-- minis:entry id=01JA2P9QK4M2N6B8V0C1X3Z5LT at=2026-10-11T14:05:02+08:00 -->\n第二条\n\n## 16:20\n<!-- minis:entry id=01JA2TB7W1E3R5T7Y9U1I3O5PA at=2026-10-11T16:20:44+08:00 -->\n第三条\n"
+    },
+    {
+      "name": "replace the last entry",
+      "input": "---\ndate: 2026-10-11\n---\n\n## 09:32\n<!-- minis:entry id=01JA2K3M7ZQ8V5X4C3B2A1N0PR at=2026-10-11T09:32:15+08:00 -->\n第一条\n\n## 14:05\n<!-- minis:entry id=01JA2P9QK4M2N6B8V0C1X3Z5LT at=2026-10-11T14:05:02+08:00 -->\n第二条\n\n## 16:20\n<!-- minis:entry id=01JA2TB7W1E3R5T7Y9U1I3O5PA at=2026-10-11T16:20:44+08:00 -->\n第三条\n",
+      "id": "01JA2TB7W1E3R5T7Y9U1I3O5PA",
+      "op": "replace",
+      "entry": {
+        "body": "x",
+        "attrs": [
+          [
+            "id",
+            "01JA2TB7W1E3R5T7Y9U1I3O5PA"
+          ],
+          [
+            "at",
+            "2026-10-11T16:20:44+08:00"
+          ],
+          [
+            "lat",
+            "31.2"
+          ]
+        ]
+      },
+      "expect": "---\ndate: 2026-10-11\n---\n\n## 09:32\n<!-- minis:entry id=01JA2K3M7ZQ8V5X4C3B2A1N0PR at=2026-10-11T09:32:15+08:00 -->\n第一条\n\n## 14:05\n<!-- minis:entry id=01JA2P9QK4M2N6B8V0C1X3Z5LT at=2026-10-11T14:05:02+08:00 -->\n第二条\n\n## 16:20\n<!-- minis:entry id=01JA2TB7W1E3R5T7Y9U1I3O5PA at=2026-10-11T16:20:44+08:00 lat=31.2 -->\nx\n"
+    },
+    {
+      "name": "duplicated id refuses to edit",
+      "input": "---\ndate: 2026-10-11\n---\n\n## 09:32\n<!-- minis:entry id=01JA2K3M7ZQ8V5X4C3B2A1N0PR at=2026-10-11T09:32:15+08:00 -->\n第一条\n\n## 09:32\n<!-- minis:entry id=01JA2K3M7ZQ8V5X4C3B2A1N0PR at=2026-10-11T09:32:15+08:00 -->\n第一条\n",
+      "id": "01JA2K3M7ZQ8V5X4C3B2A1N0PR",
+      "op": "delete",
+      "expect": null
+    },
+    {
+      "name": "unknown id refuses to edit",
+      "input": "---\ndate: 2026-10-11\n---\n\n## 09:32\n<!-- minis:entry id=01JA2K3M7ZQ8V5X4C3B2A1N0PR at=2026-10-11T09:32:15+08:00 -->\n第一条\n\n## 14:05\n<!-- minis:entry id=01JA2P9QK4M2N6B8V0C1X3Z5LT at=2026-10-11T14:05:02+08:00 -->\n第二条\n\n## 16:20\n<!-- minis:entry id=01JA2TB7W1E3R5T7Y9U1I3O5PA at=2026-10-11T16:20:44+08:00 -->\n第三条\n",
+      "id": "NOPE",
+      "op": "delete",
+      "expect": null
+    }
+  ],
+  "merge": [
+    {
+      "name": "no local file: take the package file as is",
+      "local": null,
+      "incoming": "---\ndate: 2026-10-11\n---\n\n## 09:32\n<!-- minis:entry id=01JA2K3M7ZQ8V5X4C3B2A1N0PR at=2026-10-11T09:32:15+08:00 -->\n第一条\n",
+      "expect": {
+        "result": "merged",
+        "text": "---\ndate: 2026-10-11\n---\n\n## 09:32\n<!-- minis:entry id=01JA2K3M7ZQ8V5X4C3B2A1N0PR at=2026-10-11T09:32:15+08:00 -->\n第一条\n",
+        "added": 1,
+        "updated": 0
+      }
+    },
+    {
+      "name": "disjoint entries are unioned and sorted by time",
+      "local": "---\ndate: 2026-10-11\n---\n\n## 09:32\n<!-- minis:entry id=01JA2K3M7ZQ8V5X4C3B2A1N0PR at=2026-10-11T09:32:15+08:00 -->\n旧\n",
+      "incoming": "---\ndate: 2026-10-11\n---\n\n## 08:00\n<!-- minis:entry id=01JA200000000000000000000B at=2026-10-11T08:00:00+08:00 -->\nb\n\n## 12:00\n<!-- minis:entry id=01JA200000000000000000000C at=2026-10-11T12:00:00+08:00 -->\nc\n",
+      "expect": {
+        "result": "merged",
+        "text": "---\ndate: 2026-10-11\n---\n\n## 08:00\n<!-- minis:entry id=01JA200000000000000000000B at=2026-10-11T08:00:00+08:00 -->\nb\n\n## 09:32\n<!-- minis:entry id=01JA2K3M7ZQ8V5X4C3B2A1N0PR at=2026-10-11T09:32:15+08:00 -->\n旧\n\n## 12:00\n<!-- minis:entry id=01JA200000000000000000000C at=2026-10-11T12:00:00+08:00 -->\nc\n",
+        "added": 2,
+        "updated": 0
+      }
+    },
+    {
+      "name": "same id, package edited later: package wins",
+      "local": "---\ndate: 2026-10-11\n---\n\n## 09:32\n<!-- minis:entry id=01JA2K3M7ZQ8V5X4C3B2A1N0PR at=2026-10-11T09:32:15+08:00 -->\n旧\n",
+      "incoming": "---\ndate: 2026-10-11\n---\n\n## 09:32\n<!-- minis:entry id=01JA2K3M7ZQ8V5X4C3B2A1N0PR at=2026-10-11T09:32:15+08:00 edited=2026-10-11T10:00:00+08:00 -->\n新\n",
+      "expect": {
+        "result": "merged",
+        "text": "---\ndate: 2026-10-11\n---\n\n## 09:32\n<!-- minis:entry id=01JA2K3M7ZQ8V5X4C3B2A1N0PR at=2026-10-11T09:32:15+08:00 edited=2026-10-11T10:00:00+08:00 -->\n新\n",
+        "added": 0,
+        "updated": 1
+      }
+    },
+    {
+      "name": "same id, local edited later: local kept",
+      "local": "---\ndate: 2026-10-11\n---\n\n## 09:32\n<!-- minis:entry id=01JA2K3M7ZQ8V5X4C3B2A1N0PR at=2026-10-11T09:32:15+08:00 edited=2026-10-11T10:00:00+08:00 -->\n新\n",
+      "incoming": "---\ndate: 2026-10-11\n---\n\n## 09:32\n<!-- minis:entry id=01JA2K3M7ZQ8V5X4C3B2A1N0PR at=2026-10-11T09:32:15+08:00 -->\n旧\n",
+      "expect": {
+        "result": "unchanged"
+      }
+    },
+    {
+      "name": "same id, same revision: local kept",
+      "local": "---\ndate: 2026-10-11\n---\n\n## 09:32\n<!-- minis:entry id=01JA2K3M7ZQ8V5X4C3B2A1N0PR at=2026-10-11T09:32:15+08:00 -->\n本地\n",
+      "incoming": "---\ndate: 2026-10-11\n---\n\n## 09:32\n<!-- minis:entry id=01JA2K3M7ZQ8V5X4C3B2A1N0PR at=2026-10-11T09:32:15+08:00 -->\n旧\n",
+      "expect": {
+        "result": "unchanged"
+      }
+    },
+    {
+      "name": "entry deleted locally comes back (restore never loses)",
+      "local": "---\ndate: 2026-10-11\n---\n\n## 09:32\n<!-- minis:entry id=01JA2K3M7ZQ8V5X4C3B2A1N0PR at=2026-10-11T09:32:15+08:00 -->\n第一条\n",
+      "incoming": "---\ndate: 2026-10-11\n---\n\n## 09:32\n<!-- minis:entry id=01JA2K3M7ZQ8V5X4C3B2A1N0PR at=2026-10-11T09:32:15+08:00 -->\n第一条\n\n## 14:05\n<!-- minis:entry id=01JA2P9QK4M2N6B8V0C1X3Z5LT at=2026-10-11T14:05:02+08:00 -->\n第二条\n",
+      "expect": {
+        "result": "merged",
+        "text": "---\ndate: 2026-10-11\n---\n\n## 09:32\n<!-- minis:entry id=01JA2K3M7ZQ8V5X4C3B2A1N0PR at=2026-10-11T09:32:15+08:00 -->\n第一条\n\n## 14:05\n<!-- minis:entry id=01JA2P9QK4M2N6B8V0C1X3Z5LT at=2026-10-11T14:05:02+08:00 -->\n第二条\n",
+        "added": 1,
+        "updated": 0
+      }
+    },
+    {
+      "name": "damaged package file is not merged",
+      "local": "---\ndate: 2026-10-11\n---\n\n## 09:32\n<!-- minis:entry id=01JA2K3M7ZQ8V5X4C3B2A1N0PR at=2026-10-11T09:32:15+08:00 -->\n第一条\n",
+      "incoming": "## 10:00\n\n<!-- minis:entry id=X at=2026-10-11T10:00:00+08:00 -->\nx\n",
+      "expect": {
+        "result": "unmergeable"
+      }
+    },
+    {
+      "name": "local preamble wins over package preamble",
+      "local": "我的开头\n\n## 09:32\n<!-- minis:entry id=01JA2K3M7ZQ8V5X4C3B2A1N0PR at=2026-10-11T09:32:15+08:00 -->\n第一条\n",
+      "incoming": "备份里的开头\n\n## 08:00\n<!-- minis:entry id=01JA200000000000000000000B at=2026-10-11T08:00:00+08:00 -->\nb\n",
+      "expect": {
+        "result": "merged",
+        "text": "我的开头\n\n## 08:00\n<!-- minis:entry id=01JA200000000000000000000B at=2026-10-11T08:00:00+08:00 -->\nb\n\n## 09:32\n<!-- minis:entry id=01JA2K3M7ZQ8V5X4C3B2A1N0PR at=2026-10-11T09:32:15+08:00 -->\n第一条\n",
+        "added": 1,
+        "updated": 0
+      }
+    }
+  ]
+}
