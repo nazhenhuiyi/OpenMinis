@@ -430,6 +430,14 @@ fun ChatSplitScaffold(
             ?.takeIf { it.pane == ListDetailPaneScaffoldRole.Detail }
             ?.contentKey
 
+        // [T-today-tab] The tab bar belongs on the chat tab's root only: the
+        // session list. Single-pane swaps list and chat inside this navigator
+        // without a route change, so only this scaffold can tell.
+        val listShowing = twoPane || currentSessionId == null
+        androidx.compose.runtime.LaunchedEffect(listShowing) {
+            com.openminis.app.ui.today.MainTabs.chatListVisible.value = listShowing
+        }
+
         // [T-android-new-chat-shortcut] Open a fresh draft in the detail pane.
         // Hoisted out of the detailPane call below so the keyboard shortcut and
         // the "New Chat" menu item cannot drift into doing different things.

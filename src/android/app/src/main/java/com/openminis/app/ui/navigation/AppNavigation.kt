@@ -7,6 +7,14 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.isImeVisible
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.navigation.compose.currentBackStackEntryAsState
+import kotlinx.coroutines.launch
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -434,7 +442,10 @@ fun AppNavigation(
                             "fresh=$fresh -> ${if (fresh) "RESUME_EXISTING" else "NEW_DRAFT"}",
                     )
                 }
-                if (fresh) Routes.chat(latest.id) else Routes.chat("__new__${java.util.UUID.randomUUID()}")
+                // [T-today-tab] A stale session no longer opens a blank draft:
+                // the app lands on Today (SPEC §1), and the chat tab shows the
+                // session list as before.
+                if (fresh) Routes.chat(latest.id) else null
             }
         }
         if (target != null) {
@@ -515,6 +526,62 @@ fun AppNavigation(
         quickActionStart != null -> quickActionStart
         else -> Routes.SESSION_LIST
     }
+    // [T-today-tab] Two top-level tabs (docs/design/today/SPEC.md §1). Today
+    // is an overlay above the untouched NavHost — see MainTabs for why.
+    val currentTab by com.openminis.app.ui.today.MainTabs.tab.collectAsState()
+    val chatListVisible by com.openminis.app.ui.today.MainTabs.chatListVisible.collectAsState()
+    val currentEntry by navController.currentBackStackEntryAsState()
+    val currentRoute = currentEntry?.destination?.route
+    val onToday = currentTab == com.openminis.app.ui.today.MainTabs.Tab.TODAY
+    val chatAtRoot = (currentRoute == Routes.SESSION_LIST || currentRoute == Routes.CHAT) && chatListVisible
+    @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+    val imeVisible = WindowInsets.isImeVisible
+    val showTabBar = !imeVisible && (onToday || chatAtRoot)
+    // Anything that moves the NavHost off its root (deep link, notification,
+    // share, a launch-mode resume, the user tapping into Settings) belongs to
+    // the chat tab, so every existing entry point keeps landing where it did.
+    androidx.compose.runtime.DisposableEffect(navController) {
+        val listener = androidx.navigation.NavController.OnDestinationChangedListener { _, dest, _ ->
+            if (dest.route != Routes.SESSION_LIST) {
+                com.openminis.app.ui.today.MainTabs.select(com.openminis.app.ui.today.MainTabs.Tab.CHAT)
+            }
+        }
+        navController.addOnDestinationChangedListener(listener)
+        onDispose { navController.removeOnDestinationChangedListener(listener) }
+    }
+    // Back on Today leaves the app, and must never pop the hidden chat stack.
+    // Composed only while Today shows, so it registers above the NavHost's own.
+    if (onToday) {
+        androidx.activity.compose.BackHandler {
+            (context as? android.app.Activity)?.moveTaskToBack(true)
+        }
+    }
+    val tabScope = androidx.compose.runtime.rememberCoroutineScope()
+    val askMinis: (String, List<String>) -> Unit = { text, uris ->
+        tabScope.launch {
+            com.openminis.app.ui.today.AskMinis.stage(context, text, uris)
+            com.openminis.app.ui.today.MainTabs.select(com.openminis.app.ui.today.MainTabs.Tab.CHAT)
+            // Navigate BEFORE publishing, so the warm-share fallback above sees
+            // a chat route and does not open a second draft.
+            navController.navigate(Routes.chat(newDraftSessionId())) {
+                popUpTo(Routes.SESSION_LIST) { inclusive = false }
+                launchSingleTop = true
+            }
+            com.openminis.app.ui.today.AskMinis.publish(context)
+        }
+    }
+    androidx.compose.foundation.layout.Column(Modifier.fillMaxSize()) {
+    androidx.compose.foundation.layout.Box(
+        Modifier.weight(1f).fillMaxWidth().then(
+            // The bar draws over the gesture area itself; content above must not pad for it again.
+            if (showTabBar) Modifier.consumeWindowInsets(WindowInsets.navigationBars) else Modifier,
+        ),
+    ) {
+    androidx.compose.foundation.layout.Box(
+        Modifier.fillMaxSize().then(
+            if (onToday) Modifier.clearAndSetSemantics {} else Modifier,
+        ),
+    ) {
     NavHost(
         navController = navController,
         startDestination = startDestination,
@@ -1564,4 +1631,13 @@ fun AppNavigation(
             )
         }
     }
+    } // semantics box
+    if (onToday) {
+        com.openminis.app.ui.today.TodayScreen(onAskMinis = askMinis, modifier = Modifier.fillMaxSize())
+    }
+    } // content box
+    if (showTabBar) {
+        com.openminis.app.ui.today.MainTabBar(currentTab) { com.openminis.app.ui.today.MainTabs.select(it) }
+    }
+    } // column
 }
