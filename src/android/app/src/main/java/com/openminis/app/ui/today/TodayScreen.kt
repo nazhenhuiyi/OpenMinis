@@ -102,6 +102,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.openminis.app.R
+import com.openminis.app.ui.chat.InputCircleButton
+import com.openminis.app.ui.theme.ChatColors
 import com.openminis.app.data.photos.CameraPhoto
 import com.openminis.app.data.photos.CameraRollRules
 import com.openminis.app.data.photos.CameraRollSource
@@ -631,7 +633,12 @@ private fun PartialBanner(onManage: () -> Unit) {
     }
 }
 
-/** Rounded box with the camera button INSIDE it, send button outside (SPEC §2.2). */
+/**
+ * Composer modelled on the chat input box (SPEC §2.2): one rounded card with
+ * the text on top and a button row inside it — camera on the left, send on
+ * the right. Built for longer writing: grows to 10 lines, Return inserts a
+ * newline, and only the send button sends.
+ */
 @Composable
 private fun Composer(
     draft: String,
@@ -642,70 +649,91 @@ private fun Composer(
     onSend: () -> Unit,
 ) {
     val canSend = draft.isNotBlank() || pending.isNotEmpty()
-    Row(
-        Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.background).padding(horizontal = 10.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.Bottom,
-    ) {
-        Column(
-            Modifier.weight(1f).clip(RoundedCornerShape(22.dp))
-                .background(MaterialTheme.colorScheme.surfaceContainerLow)
-                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(22.dp)),
+    val shape = RoundedCornerShape(24.dp)
+    Box(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.background).padding(horizontal = 12.dp, vertical = 8.dp)) {
+        Surface(
+            shape = shape,
+            color = ChatColors.inputBg,
+            shadowElevation = 2.dp,
+            border = androidx.compose.foundation.BorderStroke(0.5.dp, ChatColors.inputBorder),
+            modifier = Modifier.fillMaxWidth(),
         ) {
-            if (pending.isNotEmpty()) {
-                LazyRow(
-                    Modifier.padding(start = 10.dp, end = 10.dp, top = 10.dp).testTag("today_pending"),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    items(pending, key = { it.uri }) { p ->
-                        Box(Modifier.size(56.dp)) {
-                            AsyncImage(
-                                model = Uri.parse(p.uri),
-                                contentDescription = null,
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.surfaceVariant),
-                            )
-                            Box(
-                                Modifier.align(Alignment.TopEnd).offset(x = 4.dp, y = (-4).dp).size(20.dp).clip(CircleShape)
-                                    .background(Color(0xCC222222)).clickable { onDiscard(p) }.testTag("today_pending_remove"),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Icon(
-                                    Icons.Filled.Close,
-                                    contentDescription = stringResource(R.string.today_remove_photo),
-                                    tint = Color.White,
-                                    modifier = Modifier.size(12.dp),
+            Column {
+                if (pending.isNotEmpty()) {
+                    LazyRow(
+                        Modifier.padding(start = 12.dp, end = 12.dp, top = 12.dp).testTag("today_pending"),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        items(pending, key = { it.uri }) { p ->
+                            Box(Modifier.size(64.dp)) {
+                                AsyncImage(
+                                    model = Uri.parse(p.uri),
+                                    contentDescription = null,
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.surfaceVariant),
                                 )
+                                Box(
+                                    Modifier.align(Alignment.TopEnd).offset(x = 4.dp, y = (-4).dp).size(20.dp).clip(CircleShape)
+                                        .background(Color(0xCC222222)).clickable { onDiscard(p) }.testTag("today_pending_remove"),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Icon(
+                                        Icons.Filled.Close,
+                                        contentDescription = stringResource(R.string.today_remove_photo),
+                                        tint = Color.White,
+                                        modifier = Modifier.size(12.dp),
+                                    )
+                                }
                             }
                         }
                     }
                 }
-            }
-            Row(verticalAlignment = Alignment.Bottom) {
                 TextField(
                     value = draft,
                     onValueChange = onDraft,
-                    placeholder = { Text(stringResource(R.string.today_input_hint)) },
-                    maxLines = 6,
+                    placeholder = { Text(stringResource(R.string.today_input_hint), fontSize = 16.sp) },
+                    textStyle = MaterialTheme.typography.bodyLarge.copy(fontSize = 16.sp, lineHeight = 24.sp),
+                    minLines = 1,
+                    maxLines = 10,
                     colors = TextFieldDefaults.colors(
                         focusedContainerColor = Color.Transparent,
                         unfocusedContainerColor = Color.Transparent,
                         focusedIndicatorColor = Color.Transparent,
                         unfocusedIndicatorColor = Color.Transparent,
                     ),
-                    modifier = Modifier.weight(1f).heightIn(min = 44.dp).testTag("today_input"),
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("today_input"),
                 )
-                IconButton(onClick = onCamera, modifier = Modifier.testTag("today_camera")) {
-                    Icon(Icons.Outlined.CameraAlt, contentDescription = stringResource(R.string.today_take_photo), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(
+                    Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, bottom = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    InputCircleButton(onClick = onCamera) {
+                        Icon(
+                            Icons.Outlined.CameraAlt,
+                            contentDescription = stringResource(R.string.today_take_photo),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                    Spacer(Modifier.weight(1f))
+                    Box(
+                        Modifier.size(38.dp)
+                            .background(if (canSend) ChatColors.sendButton else ChatColors.sendButtonDisabled, CircleShape)
+                            .clip(CircleShape)
+                            .clickable(enabled = canSend, onClick = onSend)
+                            .testTag("today_send"),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            Icons.Filled.ArrowUpward,
+                            contentDescription = stringResource(R.string.today_send),
+                            tint = if (canSend) ChatColors.background else ChatColors.primaryText.copy(alpha = 0.5f),
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
                 }
             }
         }
-        Spacer(Modifier.width(8.dp))
-        FilledIconButton(
-            onClick = onSend,
-            enabled = canSend,
-            modifier = Modifier.padding(bottom = 4.dp).size(44.dp).testTag("today_send"),
-            colors = IconButtonDefaults.filledIconButtonColors(),
-        ) { Icon(Icons.Filled.ArrowUpward, contentDescription = stringResource(R.string.today_send)) }
     }
 }
 
