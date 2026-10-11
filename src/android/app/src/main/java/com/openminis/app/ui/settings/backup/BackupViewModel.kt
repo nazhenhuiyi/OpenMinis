@@ -915,7 +915,17 @@ class BackupViewModel(app: Application) : AndroidViewModel(app) {
     private fun loadSelectedCategories(): Set<BackupCategory> {
         val raw = prefs.getString(KEY_CATEGORIES, null) ?: return BackupCategory.backupable.toSet()
         val restored = raw.split(",").mapNotNull(BackupCategory::fromKey)
-            .filter { it in BackupCategory.backupable }.toSet()
+            .filter { it in BackupCategory.backupable }.toMutableSet()
+        // [T-today-tab] A category added after the user last saved a selection
+        // starts ON (SPEC §8.2: the journal is backed up by default). Recorded
+        // once, so turning it off afterwards sticks.
+        if (!prefs.getBoolean(KEY_JOURNAL_DEFAULTED, false)) {
+            restored += BackupCategory.JOURNAL
+            prefs.edit()
+                .putBoolean(KEY_JOURNAL_DEFAULTED, true)
+                .putString(KEY_CATEGORIES, restored.joinToString(",") { it.key })
+                .apply()
+        }
         return restored.ifEmpty { BackupCategory.backupable.toSet() }
     }
 
@@ -936,6 +946,7 @@ class BackupViewModel(app: Application) : AndroidViewModel(app) {
         const val STOPPED_MARKER = BackupRunController.STOPPED_MARKER
 
         private const val KEY_CATEGORIES = "selectedCategories"
+        private const val KEY_JOURNAL_DEFAULTED = "journalDefaulted"
         private const val KEY_ENCRYPT = "encrypt"
         private const val KEY_MAX_FILE_MB = "maxFileSizeMB"
     }

@@ -15185,6 +15185,7 @@ Shared directory /var/minis/ (bidirectional read/write between shell and app):
   /var/minis/shared/      — Cross-session shared storage for artifacts and documents. Organize by project or topic (e.g. shared/myproject/, shared/datasets/). Do NOT store temporary files here.
   /var/minis/memory/GLOBAL.md    — Persistent global memory (read-only, user-maintained via Settings).
   /var/minis/memory/YYYY-MM-DD.md — Daily memory log.
+  /var/minis/journal/YYYY/MM/YYYY-MM-DD.md — The user's own journal from the Today tab (read-only). Each entry starts with "## HH:MM" followed by a "<!-- minis:entry id=… at=… -->" metadata line (may carry lat/lng/place and photos=DCIM/… paths in the phone's photo library). Read it when the user asks what they did, wrote or photographed.
   /var/minis/mounts/<name>/      — User-mounted external folders from Settings → Mount External Folders. Presence and names vary per user; check this directory first when the task references external/user files. Some mounts may be read-only — file_write / file_edit will reject writes with a clear error message.
 
 The minis:// URL scheme:

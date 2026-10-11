@@ -50,6 +50,7 @@ import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.PhoneAndroid
 import androidx.compose.material.icons.outlined.Psychology
+import androidx.compose.material.icons.outlined.WbSunny
 import androidx.compose.material.icons.outlined.RecordVoiceOver
 import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material.icons.outlined.UnfoldMore
@@ -373,9 +374,11 @@ private fun BackupTab(
             stringResource(R.string.backup_file_footer_limited, maxFileSizeMB)
         else -> stringResource(R.string.backup_file_footer_unlimited)
     }
+    // [T-today-tab] SPEC §8.3: say plainly that photos are not in the package.
+    val journalNote = if (BackupCategory.JOURNAL in selected) stringResource(R.string.backup_journal_photos_note) else null
     SettingsSection(
         header = stringResource(R.string.backup_section_include),
-        footer = includeFooter,
+        footer = listOfNotNull(includeFooter, journalNote).joinToString("\n\n"),
     ) {
         val cats = BackupCategory.backupable
         cats.forEachIndexed { i, cat ->
@@ -1853,6 +1856,7 @@ internal fun categoryNameRes(cat: BackupCategory): Int = when (cat) {
     BackupCategory.SHARED_FILES -> R.string.backup_category_shared_files
     BackupCategory.SKILLS -> R.string.backup_category_skills
     BackupCategory.MEMORY -> R.string.backup_category_memory
+    BackupCategory.JOURNAL -> R.string.backup_category_journal
     BackupCategory.PROVIDERS -> R.string.backup_category_providers
     BackupCategory.MCP_SERVERS -> R.string.backup_category_mcp
     BackupCategory.ENVIRONMENT_VARIABLES -> R.string.backup_category_env_vars
@@ -1869,6 +1873,7 @@ private fun categoryIcon(cat: BackupCategory): ImageVector = when (cat) {
     BackupCategory.SHARED_FILES -> Icons.Outlined.Description    // doc.fill
     BackupCategory.SKILLS -> Icons.Outlined.Extension            // puzzlepiece.fill
     BackupCategory.MEMORY -> Icons.Outlined.Psychology           // brain.head.profile
+    BackupCategory.JOURNAL -> Icons.Outlined.WbSunny             // sun.max
     BackupCategory.PROVIDERS -> Icons.Outlined.Link              // link
     BackupCategory.MCP_SERVERS -> Icons.Outlined.Layers          // square.stack.3d.up.fill
     BackupCategory.ENVIRONMENT_VARIABLES -> Icons.Outlined.Terminal // terminal.fill
@@ -1881,6 +1886,7 @@ private fun categoryTint(cat: BackupCategory): Color = when (cat) {
     BackupCategory.SHARED_FILES -> Color(0xFF5856D6)         // indigo
     BackupCategory.SKILLS -> Color(0xFFFF9500)              // orange
     BackupCategory.MEMORY -> Color(0xFFFF2D55)             // pink
+    BackupCategory.JOURNAL -> Color(0xFFFF9F0A)            // amber
     BackupCategory.PROVIDERS -> Color(0xFF30B0C7)         // teal
     BackupCategory.MCP_SERVERS -> Color(0xFF32ADE6)      // cyan
     BackupCategory.ENVIRONMENT_VARIABLES -> Color(0xFFA2845E) // brown
@@ -1918,6 +1924,9 @@ private fun categoryCountLabel(
 
     cat == BackupCategory.MCP_SERVERS ->
         stringResource(R.string.backup_count_servers, stat.entries, humanBytes(stat.bytes))
+
+    cat == BackupCategory.JOURNAL ->
+        stringResource(R.string.backup_count_journal, stat.entries, humanBytes(stat.bytes))
 
     cat == BackupCategory.PROVIDERS && (stat.thinkingRules ?: 0) > 0 ->
         stringResource(

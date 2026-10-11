@@ -267,7 +267,7 @@ object PRootKernel {
         // [T-mcp-integration-android] mcp-servers is global (like memory/skills):
         // binding it here makes the in-PRoot minis-mcp-cli read/write the SAME
         // servers.json the Android Settings UI does (host: minis-global/mcp-servers).
-        listOf("memory", "skills", "shared", "mcp-servers").forEach { subdir ->
+        listOf("memory", "skills", "shared", "mcp-servers", "journal").forEach { subdir ->
             val hostDir = File(globalBase, subdir).also { it.mkdirs() }
             bindMounts["/var/minis/$subdir"] = hostDir.absolutePath
         }
@@ -415,6 +415,14 @@ object PRootKernel {
      * uses honest "Locked / Unlocked" wording. Defense-in-depth via a
      * shell-level wrapper is tracked as T219-4 follow-up (optional).
      */
+    /**
+     * [T-today-tab] `/var/minis/journal` holds the user's own words; the agent
+     * may read it but never write it (docs/design/today/SPEC.md §4.1, §4.6).
+     * Normalised so `journal/../journal/x` cannot slip past.
+     */
+    fun isJournalPath(linuxPath: String): Boolean =
+        com.openminis.app.data.journal.JournalStore.isJournalLinuxPath(linuxPath)
+
     fun isLinuxPathUnderReadOnlyMount(linuxPath: String): Boolean {
         if (!linuxPath.startsWith(MOUNTS_LINUX_PREFIX)) return false
         val store = mountedFoldersStore ?: return false

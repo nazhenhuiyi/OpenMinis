@@ -150,6 +150,10 @@ class BackupExporter(
                     onProgress?.invoke("Exporting memory…")
                     stats[BackupCategory.MEMORY.key] = exportMemory(dataDir)
                 }
+                if (BackupCategory.JOURNAL in options.categories) {
+                    onProgress?.invoke("Exporting journal…")
+                    exportJournal(dataDir)?.let { stats[BackupCategory.JOURNAL.key] = it }
+                }
                 if (BackupCategory.MCP_SERVERS in options.categories) {
                     onProgress?.invoke("Exporting MCP servers…")
                     exportMcpServers(dataDir)?.let { stats[BackupCategory.MCP_SERVERS.key] = it }
@@ -388,6 +392,30 @@ class BackupExporter(
                 entries += 1
                 bytes += file.length()
             }
+        }
+        return BackupManifest.CategoryStat(entries, bytes, encrypted = false)
+    }
+
+    /**
+     * [T-today-tab] Journal day files verbatim under `data/journal/`, same
+     * layout as on disk. The count is ENTRIES, not files (SPEC §8.2): "312
+     * entries" is what the user can check against, as with MCP servers below.
+     * Null when there is no journal, so the category is simply absent.
+     */
+    private fun exportJournal(dataDir: File): BackupManifest.CategoryStat? {
+        val source = com.openminis.app.data.journal.JournalStore.rootFor(context)
+        val files = source.takeIf { it.isDirectory }
+            ?.walkTopDown()?.filter { it.isFile && it.name.endsWith(".md") }?.toList()
+            .orEmpty()
+        if (files.isEmpty()) return null
+        val dest = File(dataDir, "journal")
+        var entries = 0
+        var bytes = 0L
+        for (file in files) {
+            val rel = file.relativeTo(source).path.replace(File.separatorChar, '/')
+            file.copyTo(File(dest, rel).apply { parentFile?.mkdirs() }, overwrite = true)
+            entries += com.openminis.app.data.journal.JournalCodec.parse(file.readText()).blocks.size
+            bytes += file.length()
         }
         return BackupManifest.CategoryStat(entries, bytes, encrypted = false)
     }

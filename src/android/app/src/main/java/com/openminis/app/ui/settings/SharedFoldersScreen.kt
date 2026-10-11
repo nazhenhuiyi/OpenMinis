@@ -18,6 +18,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Psychology
+import androidx.compose.material.icons.outlined.WbSunny
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -208,6 +209,15 @@ internal object SharedFolderRegistry {
             writable = false,
             icon = Icons.Outlined.Psychology,
             iconColor = Color(0xFFFF2D55),
+        ),
+        // [T-today-tab] The Today tab's journal: browsable, never agent-writable.
+        SharedFolderEntry(
+            id = "journal",
+            nameRes = R.string.shared_folder_name_journal,
+            linuxPath = "/var/minis/journal",
+            writable = false,
+            icon = Icons.Outlined.WbSunny,
+            iconColor = Color(0xFFFF9F0A),
         ),
     )
 

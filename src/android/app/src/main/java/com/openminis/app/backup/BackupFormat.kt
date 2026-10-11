@@ -145,6 +145,15 @@ enum class BackupCategory(val key: String) {
     SHARED_FILES("shared_files"),
     SKILLS("skills"),
     MEMORY("memory"),
+
+    /**
+     * [T-today-tab] The Today tab's journal day files
+     * (`minis-global/journal/YYYY/MM/YYYY-MM-DD.md`). Restored by MERGING per
+     * entry, never by overwriting (docs/design/today/SPEC.md §8.4). The wire
+     * key must match iOS once iOS reads journals; until then an older reader
+     * skips it via [fromKey].
+     */
+    JOURNAL("journal"),
     PROVIDERS("providers"),
     MCP_SERVERS("mcp_servers"),
     VOICE_CORRECTIONS("voice_corrections"),
@@ -165,7 +174,7 @@ enum class BackupCategory(val key: String) {
     val carriesFileTree: Boolean
         get() = when (this) {
             CHATS, SHARED_FILES, SKILLS -> true
-            MEMORY, PROVIDERS, MCP_SERVERS, VOICE_CORRECTIONS,
+            MEMORY, JOURNAL, PROVIDERS, MCP_SERVERS, VOICE_CORRECTIONS,
             ENVIRONMENT_VARIABLES -> false
         }
 

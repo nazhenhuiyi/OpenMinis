@@ -222,6 +222,7 @@ class BackupImporter(
                         BackupCategory.SHARED_FILES -> importSharedFiles(work, fileIndex)
                         BackupCategory.SKILLS -> importSkills(work, fileIndex)
                         BackupCategory.MEMORY -> importMemory(work)
+                        BackupCategory.JOURNAL -> importJournal(work)
                         BackupCategory.MCP_SERVERS -> importMcpServers(work)
                         BackupCategory.PROVIDERS -> importProviders(work)
                         BackupCategory.ENVIRONMENT_VARIABLES -> importEnvironmentVariables(work)
@@ -686,6 +687,46 @@ class BackupImporter(
         return report
     }
 
+    /**
+     * [T-today-tab] Journal restore MERGES each day file entry by entry
+     * (docs/design/today/SPEC.md §8.4) instead of overwriting like
+     * [importMemory]: restoring an old package must never erase entries
+     * written on this phone since. A package file that does not parse cleanly
+     * is kept verbatim next to the local one as `<day>.restored-<time>.md`.
+     */
+    private suspend fun importJournal(root: File): CategoryReport {
+        val report = CategoryReport(BackupCategory.JOURNAL.key)
+        val src = File(root, "data/journal")
+        if (!src.isDirectory) return report
+        val store = com.openminis.app.data.journal.JournalStore.get(context)
+        val stamp = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).format(java.util.Date())
+        for (file in src.walkTopDown().filter { it.isFile && it.name.endsWith(".md") }) {
+            // Only well-formed day file names; anything else in the package is ignored.
+            val date = runCatching { java.time.LocalDate.parse(file.name.removeSuffix(".md")) }.getOrNull()
+            if (date == null) { report.rejectedPaths += 1; continue }
+            val local = store.fileFor(date)
+            val incoming = file.readText()
+            when (val r = com.openminis.app.data.journal.JournalMerge.merge(local.takeIf { it.isFile }?.readText(), incoming)) {
+                is com.openminis.app.data.journal.JournalMerge.Result.Merged -> {
+                    store.writeDay(date, r.text)
+                    report.filesWritten += 1
+                    report.bytesWritten += r.text.length
+                    report.imported += r.added
+                    report.updated += r.updated
+                }
+                com.openminis.app.data.journal.JournalMerge.Result.Unchanged -> Unit
+                com.openminis.app.data.journal.JournalMerge.Result.Unmergeable -> {
+                    val aside = File(local.parentFile, "$date.restored-$stamp.md")
+                    com.openminis.app.data.journal.JournalStore.writeAtomically(aside, incoming)
+                    report.filesWritten += 1
+                    report.bytesWritten += incoming.length
+                    AppLogger.warning(TAG, "[Restore] journal $date did not parse; saved as ${aside.name}")
+                }
+            }
+        }
+        return report
+    }
+
     private fun importMcpServers(root: File): CategoryReport {
         val report = CategoryReport(BackupCategory.MCP_SERVERS.key)
         val src = File(root, "data/mcp_servers.json")
@@ -1144,6 +1185,7 @@ class BackupImporter(
             BackupCategory.SHARED_FILES,
             BackupCategory.SKILLS,
             BackupCategory.MEMORY,
+            BackupCategory.JOURNAL,
             BackupCategory.MCP_SERVERS,
             // Providers before env-vars: both pull VALUES from secrets.json, but
             // provider import is where credentials for BOTH are applied on iOS.

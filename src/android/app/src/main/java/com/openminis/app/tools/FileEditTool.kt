@@ -64,6 +64,14 @@ object FileEditTool {
                     false, toolTitle = toolTitle,
                 )
             }
+            // [T-today-tab] The user's journal is read-only to the agent.
+            if (PRootKernel.isJournalPath(path)) {
+                return ToolExecutionResult(
+                    "Error: $path is the user's journal (/var/minis/journal), which is read-only. " +
+                        "Quote it or save notes to memory instead.",
+                    false, toolTitle = toolTitle,
+                )
+            }
 
             // T123: per-session resolver — see FileWriteTool for rationale.
             val file = PRootKernel.resolveSessionHostPath(sessionId, path, context)
