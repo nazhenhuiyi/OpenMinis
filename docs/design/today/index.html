@@ -1,0 +1,798 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Minis 今日 · 交互原型</title>
+<style>
+  :root {
+    --bg: #F6F5FB; --panel: #FFFFFF; --text: #1E1B2E; --sub: #6B6785; --border: #E6E3F2;
+    --accent: #7C5CFF; --accent-soft: #EEE9FF; --card: #FFFFFF; --screen: #F7F6FB;
+    --rail: #DCD7EE; --danger: #E5484D;
+  }
+  body.dark {
+    --bg: #121220; --panel: #1C1C2E; --text: #F1EFFA; --sub: #A19DBA; --border: #2C2B44;
+    --accent: #A08BFF; --accent-soft: #2B2648; --card: #22223A; --screen: #16162A; --rail: #34324F;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "PingFang SC", "Roboto", "Helvetica Neue", sans-serif;
+    background: var(--bg); color: var(--text); transition: background .3s, color .3s;
+  }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 24px; display: grid; grid-template-columns: 400px 1fr; gap: 28px; align-items: start; }
+  @media (max-width: 900px) { .wrap { grid-template-columns: 1fr; justify-items: center; } }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 14px; margin: 0 0 10px; }
+  .hint { color: var(--sub); font-size: 12px; margin: 0 0 16px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 16px; margin-bottom: 16px; }
+
+  /* ───── 手机外框 ───── */
+  .phone {
+    width: 380px; height: 800px; border-radius: 44px; padding: 10px; background: #111;
+    box-shadow: 0 20px 60px rgba(30, 20, 80, .25); position: sticky; top: 24px;
+  }
+  .screen {
+    width: 100%; height: 100%; border-radius: 36px; overflow: hidden; background: var(--screen);
+    display: flex; flex-direction: column; position: relative;
+  }
+  .statusbar { height: 34px; flex: none; display: flex; align-items: center; justify-content: space-between; padding: 0 24px; font-size: 12px; font-weight: 600; }
+  .view { flex: 1; min-height: 0; display: none; flex-direction: column; }
+  .view.active { display: flex; }
+
+  /* 顶栏 */
+  .appbar { flex: none; display: flex; align-items: baseline; gap: 10px; padding: 6px 18px 10px; }
+  .appbar .title { font-size: 22px; font-weight: 700; }
+  .appbar .date { color: var(--sub); font-size: 13px; }
+  .appbar .more { margin-left: auto; background: none; border: 0; font-size: 20px; color: var(--sub); padding: 0 4px; }
+
+  /* 时间线 */
+  .timeline { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 14px 12px; scroll-behavior: smooth; }
+  .divider { display: flex; align-items: center; gap: 10px; color: var(--sub); font-size: 12px; margin: 14px 0 8px; }
+  .divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: var(--rail); }
+  .empty { text-align: center; color: var(--sub); font-size: 12px; padding: 10px 0 4px; opacity: .8; }
+  .entry { display: grid; grid-template-columns: 44px 1fr; gap: 8px; position: relative; user-select: none; -webkit-user-select: none; }
+  .entry .time { font-size: 12px; color: var(--sub); text-align: right; padding-top: 11px; font-variant-numeric: tabular-nums; }
+  .entry .rail { position: absolute; left: 52px; top: 0; bottom: 0; width: 2px; background: var(--rail); }
+  .entry .dot { position: absolute; left: 48px; top: 16px; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); border: 2px solid var(--screen); }
+  .entry.photo .dot { background: #F59E0B; }
+  .entry .body { margin-left: 14px; margin-bottom: 10px; background: var(--card); border-radius: 14px; padding: 10px 12px; box-shadow: 0 1px 2px rgba(30, 20, 80, .06); transition: transform .15s; }
+  .entry.pressing .body { transform: scale(.97); }
+  .entry.flash .body { animation: flash 1.2s; }
+  @keyframes flash { 0% { box-shadow: 0 0 0 3px var(--accent); } 100% { box-shadow: 0 1px 2px rgba(30,20,80,.06); } }
+  .text { white-space: pre-wrap; word-break: break-word; }
+  .meta { display: flex; gap: 8px; margin-top: 6px; color: var(--sub); font-size: 11px; flex-wrap: wrap; }
+  .chip { display: inline-flex; align-items: center; gap: 3px; }
+  .spin { width: 9px; height: 9px; border-radius: 50%; border: 1.5px solid var(--sub); border-top-color: transparent; animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .entry.photo .body { padding: 4px; }
+  .entry.photo .meta { margin: 6px 8px 4px; }
+
+  /* 照片缩略图 */
+  .grid { display: grid; gap: 4px; border-radius: 10px; overflow: hidden; }
+  .grid.n1 { grid-template-columns: 1fr; }
+  .grid.n1 .thumb { aspect-ratio: 4 / 3; font-size: 54px; }
+  .grid.n2, .grid.n4, .grid.n3 { grid-template-columns: 1fr 1fr; }
+  .grid.n5 { grid-template-columns: 1fr 1fr; }
+  .thumb {
+    aspect-ratio: 1; display: grid; place-items: center; font-size: 30px; position: relative; cursor: pointer;
+    background: linear-gradient(135deg, hsl(var(--h) 75% 84%), hsl(calc(var(--h) + 40) 70% 66%));
+  }
+  .thumb .more { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(0,0,0,.45); color: #fff; font-size: 20px; font-weight: 600; }
+  .thumb.gone { background: var(--rail); font-size: 11px; text-align: center; line-height: 1.4; color: var(--sub); cursor: default; }
+
+  /* 权限卡片 / 提示条 */
+  .perm { background: var(--accent-soft); border-radius: 14px; padding: 12px 14px; margin: 6px 0 4px; font-size: 13px; }
+  .perm b { display: block; margin-bottom: 2px; }
+  .perm button { margin-top: 8px; background: var(--accent); color: #fff; border: 0; border-radius: 999px; padding: 6px 14px; font-size: 13px; }
+  .partial { font-size: 12px; color: var(--sub); background: var(--card); border-radius: 10px; padding: 6px 10px; margin: 6px 0 2px; display: flex; justify-content: space-between; }
+  .partial a { color: var(--accent); cursor: pointer; }
+
+  /* 输入栏 */
+  .composer { flex: none; padding: 8px 10px 8px; background: var(--screen); border-top: 1px solid var(--border); }
+  .box { flex: 1; min-width: 0; background: var(--card); border: 1px solid var(--border); border-radius: 22px; transition: border-color .15s; }
+  .box:focus-within { border-color: var(--accent); }
+  .boxrow { display: flex; align-items: flex-end; }
+  .box textarea {
+    flex: 1; resize: none; border: 0; background: none; color: var(--text); outline: none;
+    padding: 9px 4px 9px 14px; font: inherit; line-height: 20px; max-height: 140px;
+  }
+  .inbtn { flex: none; width: 38px; height: 38px; border: 0; background: none; font-size: 18px; border-radius: 50%; opacity: .75; }
+  .inbtn:hover { opacity: 1; }
+  .tray { display: flex; gap: 6px; padding: 8px 10px 2px; overflow-x: auto; }
+  .tray:empty { display: none; }
+  .tray .thumb { width: 54px; flex: none; border-radius: 10px; font-size: 24px; }
+  .tray .x { position: absolute; top: -4px; right: -4px; width: 18px; height: 18px; border-radius: 50%; border: 0; background: #333; color: #fff; font-size: 11px; line-height: 18px; padding: 0; }
+  .row { display: flex; align-items: flex-end; gap: 6px; }
+  .iconbtn { flex: none; width: 40px; height: 40px; border-radius: 50%; border: 0; background: var(--card); font-size: 18px; display: grid; place-items: center; }
+  .send { background: var(--accent); color: #fff; }
+  .send:disabled { opacity: .35; cursor: default; }
+  textarea.input {
+    flex: 1; resize: none; border: 1px solid var(--border); background: var(--card); color: var(--text); border-radius: 20px;
+    padding: 9px 14px; font: inherit; line-height: 20px; max-height: 140px; outline: none;
+  }
+  textarea.input:focus { border-color: var(--accent); }
+  .quote { margin: 0 4px 8px; background: var(--card); border-left: 3px solid var(--accent); border-radius: 8px; padding: 6px 10px; font-size: 12px; color: var(--sub); position: relative; }
+  .quote .x { position: absolute; top: 4px; right: 6px; background: none; border: 0; color: var(--sub); }
+
+  /* 底部导航 */
+  .nav { flex: none; display: flex; justify-content: space-around; padding: 6px 0 14px; background: var(--panel); border-top: 1px solid var(--border); }
+  .nav button { background: none; border: 0; display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 12px; color: var(--sub); }
+  .nav .ico { width: 56px; height: 28px; border-radius: 999px; display: grid; place-items: center; font-size: 16px; transition: background .2s; }
+  .nav button.on { color: var(--text); font-weight: 600; }
+  .nav button.on .ico { background: var(--accent-soft); }
+  .nav.hidden { display: none; }
+
+  /* 聊天 */
+  .sessions { flex: 1; overflow-y: auto; padding: 0 12px; }
+  .session { background: var(--card); border-radius: 14px; padding: 10px 14px; margin-bottom: 8px; cursor: pointer; }
+  .session .t { font-weight: 600; }
+  .session .s { color: var(--sub); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .convbar { flex: none; display: flex; align-items: center; gap: 8px; padding: 4px 12px 10px; font-weight: 600; }
+  .convbar button { background: none; border: 0; font-size: 20px; }
+  .msgs { flex: 1; overflow-y: auto; padding: 4px 14px 10px; display: flex; flex-direction: column; gap: 8px; }
+  .bubble { max-width: 82%; padding: 8px 12px; border-radius: 16px; white-space: pre-wrap; }
+  .bubble.me { align-self: flex-end; background: var(--accent); color: #fff; border-bottom-right-radius: 4px; }
+  .bubble.ai { align-self: flex-start; background: var(--card); border-bottom-left-radius: 4px; }
+  .bubble .q { font-size: 12px; opacity: .85; border-left: 2px solid rgba(255,255,255,.7); padding-left: 6px; margin-bottom: 4px; }
+  .fab { position: absolute; right: 18px; bottom: 90px; background: var(--accent); color: #fff; border: 0; border-radius: 16px; padding: 12px 16px; box-shadow: 0 6px 16px rgba(124,92,255,.35); }
+
+  /* 底部菜单 / 浮层 */
+  .scrim { position: absolute; inset: 0; background: rgba(0,0,0,.35); display: none; z-index: 10; }
+  .scrim.show { display: block; }
+  .sheet { position: absolute; left: 0; right: 0; bottom: 0; background: var(--panel); border-radius: 22px 22px 0 0; padding: 8px 8px 20px; z-index: 11; transform: translateY(105%); transition: transform .22s; }
+  .sheet.show { transform: none; }
+  .sheet .grab { width: 36px; height: 4px; border-radius: 2px; background: var(--rail); margin: 4px auto 10px; }
+  .sheet .peek { font-size: 12px; color: var(--sub); padding: 0 12px 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sheet button { display: block; width: 100%; text-align: left; background: none; border: 0; padding: 12px 16px; border-radius: 12px; font-size: 15px; }
+  .sheet button:hover { background: var(--accent-soft); }
+  .sheet button.danger { color: var(--danger); }
+  .viewer { position: absolute; inset: 0; background: #000; z-index: 20; display: none; flex-direction: column; color: #fff; }
+  .viewer.show { display: flex; }
+  .viewer .vbar { display: flex; align-items: center; gap: 8px; padding: 40px 14px 10px; }
+  .viewer .vbar button { background: none; border: 0; color: #fff; font-size: 20px; }
+  .viewer .vgrid { flex: 1; overflow-y: auto; display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px; align-content: start; }
+  .viewer .big { flex: 1; display: grid; place-items: center; font-size: 120px; }
+  .viewer .cap { padding: 10px 16px 24px; font-size: 12px; color: #bbb; font-family: ui-monospace, Menlo, monospace; }
+  .edit textarea { width: 100%; border: 1px solid var(--accent); border-radius: 10px; padding: 6px 8px; font: inherit; background: var(--screen); color: var(--text); resize: vertical; min-height: 60px; }
+  .edit .acts { display: flex; gap: 8px; justify-content: flex-end; margin-top: 6px; }
+  .edit .acts button { border: 0; border-radius: 999px; padding: 4px 12px; background: var(--accent-soft); }
+  .edit .acts button.primary { background: var(--accent); color: #fff; }
+  .toast { position: absolute; left: 50%; bottom: 150px; transform: translateX(-50%); background: rgba(30, 27, 46, .92); color: #fff; padding: 8px 14px; border-radius: 999px; font-size: 12px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 30; white-space: nowrap; }
+  .toast.show { opacity: 1; }
+
+  /* 右侧控制面板 */
+  .btns { display: flex; flex-wrap: wrap; gap: 8px; }
+  .btn { border: 1px solid var(--border); background: var(--bg); border-radius: 999px; padding: 6px 12px; font-size: 13px; }
+  .btn:hover { border-color: var(--accent); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .clock { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; margin-bottom: 8px; }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 999px; overflow: hidden; }
+  .seg button { border: 0; background: none; padding: 5px 12px; font-size: 13px; }
+  .seg button.on { background: var(--accent); color: #fff; }
+  .setting { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 0; }
+  .log { font: 12px/1.6 ui-monospace, Menlo, monospace; max-height: 180px; overflow-y: auto; background: var(--bg); border-radius: 10px; padding: 8px 10px; }
+  .log .ok { color: #16A974; } .log .no { color: var(--danger); }
+  ul.rules { margin: 0; padding-left: 18px; color: var(--sub); font-size: 13px; }
+  ul.rules li { margin: 2px 0; }
+  .modal { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: none; place-items: center; z-index: 100; padding: 24px; }
+  .modal.show { display: grid; }
+  .modal .box { background: var(--panel); border-radius: 16px; width: min(760px, 100%); max-height: 85vh; display: flex; flex-direction: column; }
+  .modal .head { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--border); font-weight: 600; }
+  .modal pre { margin: 0; padding: 16px; overflow: auto; font: 12px/1.6 ui-monospace, Menlo, monospace; white-space: pre-wrap; word-break: break-all; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <!-- ───────────── 手机 ───────────── -->
+  <div class="phone">
+    <div class="screen" id="screen">
+      <div class="statusbar"><span id="sbTime">16:10</span><span>▂▄▆ 🔋</span></div>
+
+      <!-- 今日 -->
+      <section class="view active" id="viewToday">
+        <div class="appbar">
+          <span class="title">今日</span>
+          <span class="date" id="todayLabel"></span>
+          <button class="more" id="moreBtn" title="今日设置">⋯</button>
+        </div>
+        <div class="timeline" id="timeline"></div>
+        <div class="composer">
+          <div class="row">
+            <!-- 拍照按钮和待发送的照片都在输入框里面 -->
+            <div class="box" id="todayBox">
+              <div class="tray" id="tray"></div>
+              <div class="boxrow">
+                <textarea id="input" rows="1" placeholder="写点什么…"></textarea>
+                <button class="inbtn" id="camBtn" title="拍照（写入 DCIM/Minis/）">📷</button>
+              </div>
+            </div>
+            <button class="iconbtn send" id="sendBtn" disabled>↑</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 聊天：会话列表 -->
+      <section class="view" id="viewChatList">
+        <div class="appbar"><span class="title">聊天</span><button class="more" title="设置">⚙︎</button></div>
+        <div class="sessions" id="sessions"></div>
+        <button class="fab" id="newChat">＋ 新对话</button>
+      </section>
+
+      <!-- 聊天：会话 -->
+      <section class="view" id="viewConv">
+        <div class="convbar"><button id="backBtn">‹</button><span id="convTitle">新对话</span></div>
+        <div class="msgs" id="msgs"></div>
+        <div class="composer">
+          <div id="quoteBox"></div>
+          <div class="row">
+            <button class="iconbtn">＋</button>
+            <textarea class="input" id="chatInput" rows="1" placeholder="问问 Minis…"></textarea>
+            <button class="iconbtn send" id="chatSend">↑</button>
+          </div>
+        </div>
+      </section>
+
+      <nav class="nav" id="nav">
+        <button data-tab="today" class="on"><span class="ico">☀︎</span>今日</button>
+        <button data-tab="chat"><span class="ico">💬</span>聊天</button>
+      </nav>
+
+      <div class="scrim" id="scrim"></div>
+      <div class="sheet" id="sheet"></div>
+      <div class="viewer" id="viewer"></div>
+      <div class="toast" id="toast"></div>
+    </div>
+  </div>
+
+  <!-- ───────────── 控制面板 ───────────── -->
+  <div>
+    <h1>Minis「今日」交互原型</h1>
+    <p class="hint">对应 <code>docs/design/today/SPEC.md</code>。左边的手机可以直接操作：写碎碎念、点 📷 拍照、<b>长按</b>任意一条打开菜单、点照片查看。右边用来模拟时间流逝和手机上发生的事。</p>
+
+    <div class="card">
+      <h2>模拟时钟</h2>
+      <div class="clock" id="clock">16:10</div>
+      <div class="btns">
+        <button class="btn" data-adv="5">+5 分钟</button>
+        <button class="btn" data-adv="30">+30 分钟</button>
+        <button class="btn" data-adv="70">+70 分钟</button>
+        <button class="btn" data-adv="180">+3 小时</button>
+      </div>
+      <p class="hint" style="margin:8px 0 0">新的记录和照片都用这个时间。拉开 60 分钟以上再拍，会开始一个新的照片组。</p>
+    </div>
+
+    <div class="card">
+      <h2>模拟手机上发生的事</h2>
+      <div class="btns">
+        <button class="btn primary" id="simCamera">📷 用系统相机拍一张</button>
+        <button class="btn" id="simWeixin">💬 微信存了一张图</button>
+        <button class="btn" id="simShot">📱 截了一张屏</button>
+        <button class="btn" id="simDelete">🗑 在相册删掉最新一张</button>
+      </div>
+      <p class="hint" style="margin:10px 0 6px">识别日志（§5.1 路径规则）</p>
+      <div class="log" id="log"></div>
+    </div>
+
+    <div class="card">
+      <h2>设置和权限</h2>
+      <div class="setting"><span>相册权限</span>
+        <span class="seg" id="permSeg">
+          <button data-perm="none">未授权</button><button data-perm="partial">部分照片</button><button data-perm="full" class="on">全部</button>
+        </span>
+      </div>
+      <div class="setting"><span>照片组间隔</span>
+        <span class="seg" id="gapSeg">
+          <button data-gap="30">30 分钟</button><button data-gap="60" class="on">60 分钟</button><button data-gap="90">90 分钟</button>
+        </span>
+      </div>
+      <div class="setting"><span>记录位置</span><input type="checkbox" id="locToggle" checked></div>
+      <div class="setting"><span>深色模式</span><input type="checkbox" id="darkToggle"></div>
+      <div class="btns" style="margin-top:8px">
+        <button class="btn" id="showJournal">📄 查看今天的 journal 文件</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>原型里体现的规则</h2>
+      <ul class="rules">
+        <li>最新的在最下面，输入框在底部；往上滑是昨天</li>
+        <li>只有 <code>DCIM/Camera/</code> 和 <code>DCIM/Minis/</code> 里的照片会出现，微信存图和截图不出现</li>
+        <li>满足任一条件就开始新的照片组：间隔超过阈值、中间有碎碎念、整组跨度超过 3 小时、跨天</li>
+        <li>📷 在输入框里面；在「今日」里拍的照片先放进输入框；发送时有文字就挂在这条碎碎念下面，没有文字就放回时间线参与聚合</li>
+        <li>发送立刻上屏，位置在后台补上（"定位中…"）</li>
+        <li>照片组只显示缩略图和地名，不显示「N 张」</li>
+        <li>照片组没有删除选项，要删去相册删；碎碎念引用的照片被删后显示占位</li>
+        <li>「问问 Minis」会新建对话并带上引用，不会自动发送</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="modal">
+  <div class="box">
+    <div class="head"><span id="modalTitle"></span><button class="btn" id="modalClose">关闭</button></div>
+    <pre id="modalBody"></pre>
+  </div>
+</div>
+
+<script>
+/* ───────────── 工具函数 ───────────── */
+const $ = (s) => document.querySelector(s);
+const D0 = new Date(); D0.setHours(0, 0, 0, 0);
+const MIN = 60e3, HOUR = 60 * MIN;
+const at = (day, h, m, s = 0) => new Date(D0.getTime() + day * 24 * HOUR + h * HOUR + m * MIN + s * 1e3);
+const pad = (n) => String(Math.abs(n)).padStart(2, '0');
+const hm = (d) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+const dayKey = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const sameDay = (a, b) => dayKey(a) === dayKey(b);
+const WEEK = '日一二三四五六';
+const dayLabel = (d) => `${d.getMonth() + 1}月${d.getDate()}日 周${WEEK[d.getDay()]}`;
+const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const stamp = (d) => `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+function iso(d) {
+  const off = -d.getTimezoneOffset();
+  return `${dayKey(d)}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}${off >= 0 ? '+' : '-'}${pad(Math.floor(Math.abs(off) / 60))}:${pad(Math.abs(off) % 60)}`;
+}
+const CROCK = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+function ulid(d) {
+  let t = d.getTime(), time = '';
+  for (let i = 0; i < 10; i++) { time = CROCK[t % 32] + time; t = Math.floor(t / 32); }
+  let rnd = '';
+  for (let i = 0; i < 16; i++) rnd += CROCK[Math.floor(Math.random() * 32)];
+  return time + rnd;
+}
+let seq = 0;
+const uid = () => 'p' + (++seq);
+
+/* ───────────── 状态 ───────────── */
+const S = {
+  now: at(0, 16, 10),
+  gap: 60, maxSpanH: 3,
+  perm: 'full', loc: true,
+  tab: 'today', chatView: 'list',
+  pending: [],           // 输入框上方待发送的照片 id
+  editing: null,         // 正在编辑的碎碎念 id
+  quote: null,           // 「问问 Minis」带过去的引用
+  msgs: [],
+};
+
+// 相册：模拟 MediaStore 里的行。selected = 「部分照片」授权时用户选中的
+const roll = [];
+function addPhoto(d, path, emoji, h, place, selected = true) {
+  const p = { id: uid(), at: d, path, name: path.split('/').pop(), emoji, h, place, selected, deleted: false, w: 4000, hgt: 3000 };
+  roll.push(p);
+  return p;
+}
+function camPath(d, prefix = 'DCIM/Camera/IMG_') { return `${prefix}${stamp(d)}.jpg`; }
+
+// 碎碎念：对应 journal 文件里的一条
+const notes = [];
+function addNote(d, text, extra = {}) {
+  const n = { id: ulid(d), at: d, text, photos: [], ...extra };
+  notes.push(n);
+  return n;
+}
+
+/* 初始数据：昨天晚饭 + 今天一天 */
+(function seed() {
+  [[18, 52, '🍜', 20], [19, 5, '🍣', 0], [19, 21, '🍶', 200], [19, 40, '🥢', 30]].forEach(([h, m, e, hue], i) =>
+    addPhoto(at(-1, h, m), camPath(at(-1, h, m)), e, hue, '南京西路', i % 2 === 0));
+  addNote(at(-1, 21, 40, 12), '好累，早点睡 😴', { lat: 31.22811, lng: 121.45470, acc: 25, place: '家' });
+
+  addPhoto(at(0, 8, 50), camPath(at(0, 8, 50)), '🥐', 35, '家附近');
+  addNote(at(0, 9, 32, 15), '今天的咖啡有点酸。', { lat: 31.22345, lng: 121.44567, acc: 18, place: '静安寺附近' });
+  addPhoto(at(0, 11, 2), 'Pictures/WeiXin/mmexport1728615720000.jpg', '🧧', 0, null);
+  [[12, 10, '🌳', 110], [12, 18, '🐱', 30], [12, 30, '🌸', 330], [12, 41, '🦆', 180], [12, 55, '🌤', 200]].forEach(([h, m, e, hue], i) =>
+    addPhoto(at(0, h, m), camPath(at(0, h, m)), e, hue, '静安公园', i !== 3));
+  addPhoto(at(0, 13, 20), 'Pictures/Screenshots/Screenshot_' + stamp(at(0, 13, 20)) + '.png', '🧾', 260, null);
+  addNote(at(0, 14, 5, 2), '终于把 v1.14 发出去了。\n明天开始想想「今日」怎么做。', { edited: at(0, 14, 7, 40) });
+  const cat = addPhoto(at(0, 15, 38, 31), camPath(at(0, 15, 38, 31), 'DCIM/Minis/MINIS_'), '🐈', 40, '家附近');
+  addNote(at(0, 15, 40, 44), '楼下的猫又来了。', { photos: [cat.id], lat: 31.22790, lng: 121.45501, acc: 12, place: '家附近' });
+})();
+
+/* ───────────── §5.1 识别 + §5.2 聚合 ───────────── */
+function classify(path) {
+  if (/^DCIM\/Minis\//.test(path)) return { ok: true, why: 'Minis 相册' };
+  if (/^DCIM\/Camera\//i.test(path)) return { ok: true, why: '相机目录' };
+  return { ok: false, why: '不在相机目录' };
+}
+const canSee = (p) => !p.deleted && (S.perm === 'full' || (S.perm === 'partial' && p.selected));
+
+function buildTimeline() {
+  const attached = new Set(notes.flatMap((n) => n.photos));
+  const pending = new Set(S.pending);
+  const free = roll.filter((p) => canSee(p) && classify(p.path).ok && !attached.has(p.id) && !pending.has(p.id));
+  const events = [
+    ...notes.map((n) => ({ kind: 'note', at: n.at, n })),
+    ...free.map((p) => ({ kind: 'photo', at: p.at, p })),
+  ].sort((a, b) => a.at - b.at);
+
+  const items = [];
+  let g = null;
+  for (const e of events) {
+    if (e.kind === 'note') { g = null; items.push(e); continue; }       // 条件 2：碎碎念打断
+    const fits = g
+      && e.at - g.last <= S.gap * MIN                                   // 条件 1：间隔
+      && e.at - g.at <= S.maxSpanH * HOUR                               // 条件 3：最大跨度
+      && sameDay(e.at, g.at);                                           // 条件 4：跨天
+    if (fits) { g.photos.push(e.p); g.last = e.at; }
+    else { g = { kind: 'group', at: e.at, last: e.at, photos: [e.p] }; items.push(g); }
+  }
+  return items;
+}
+
+/* ───────────── 渲染：今日 ───────────── */
+function thumbs(list, max = 4) {
+  const n = list.length;
+  const cls = n === 1 ? 'n1' : n <= 4 ? 'n' + n : 'n5';
+  const shown = n > 4 ? list.slice(0, 4) : list;
+  return `<div class="grid ${cls}">` + shown.map((p, i) => {
+    if (p.deleted) return `<div class="thumb gone">照片不在<br>这台手机上</div>`;
+    const more = n > 4 && i === 3 ? `<span class="more">+${n - 3}</span>` : '';
+    return `<div class="thumb" style="--h:${p.h}" data-photo="${p.id}">${p.emoji}${more}</div>`;
+  }).join('') + `</div>`;
+}
+
+function renderItem(it) {
+  if (it.kind === 'note') {
+    const n = it.n;
+    let body;
+    if (S.editing === n.id) {
+      body = `<div class="edit"><textarea id="editBox">${esc(n.text)}</textarea>
+        <div class="acts"><button data-act="cancelEdit">取消</button><button class="primary" data-act="saveEdit">保存</button></div></div>`;
+    } else {
+      body = `<div class="text">${esc(n.text)}</div>`;
+    }
+    const photos = n.photos.map((id) => roll.find((p) => p.id === id)).filter(Boolean);
+    const meta = [];
+    if (n.locating) meta.push(`<span class="chip"><span class="spin"></span>定位中…</span>`);
+    else if (n.place && S.loc) meta.push(`<span class="chip">📍 ${esc(n.place)}</span>`);
+    if (n.edited) meta.push(`<span class="chip">已编辑</span>`);
+    return `<div class="entry note" data-note="${n.id}">
+      <div class="time">${hm(n.at)}</div><span class="rail"></span><span class="dot"></span>
+      <div class="body">${body}${photos.length ? `<div style="margin-top:8px">${thumbs(photos)}</div>` : ''}
+        ${meta.length ? `<div class="meta">${meta.join('')}</div>` : ''}</div></div>`;
+  }
+  // 照片组不加"N 张"标题：缩略图本身就说明了一切，只在下面补地名
+  const ps = it.photos;
+  const place = S.loc ? (ps.find((p) => p.place) || {}).place : null;
+  return `<div class="entry photo" data-group="${ps.map((p) => p.id).join(',')}">
+    <div class="time">${hm(it.at)}</div><span class="rail"></span><span class="dot"></span>
+    <div class="body">${thumbs(ps)}${place ? `<div class="meta"><span class="chip">📍 ${esc(place)}</span></div>` : ''}</div></div>`;
+}
+
+function renderToday(scroll = false) {
+  const tl = $('#timeline');
+  const nearBottom = tl.scrollHeight - tl.scrollTop - tl.clientHeight < 80;
+  const items = buildTimeline();
+  const today = S.now;
+  const yesterday = new Date(today.getTime() - 24 * HOUR);
+  let html = '';
+  if (S.perm === 'none') {
+    html += `<div class="perm"><b>开启相册访问</b>今天用相机拍的照片会自动出现在这里，同一时段的会聚成一条。只读取相机目录，不会读微信图片和截图。<br><button data-act="grant">开启</button></div>`;
+  } else if (S.perm === 'partial') {
+    html += `<div class="partial"><span>仅显示你选择的部分照片</span><a data-act="grant">管理</a></div>`;
+  }
+  for (const d of [yesterday, today]) {
+    const dayItems = items.filter((it) => sameDay(it.at, d));
+    const isToday = sameDay(d, today);
+    if (!dayItems.length && !isToday) continue;
+    html += `<div class="divider">${isToday ? '今天' : '昨天'} · ${dayLabel(d)}</div>`;
+    html += dayItems.map(renderItem).join('') || `<div class="empty">今天还没有记录</div>`;
+  }
+  tl.innerHTML = html;
+  if (scroll || nearBottom) { tl.style.scrollBehavior = 'auto'; tl.scrollTop = tl.scrollHeight; tl.style.scrollBehavior = ''; }
+  if (S.editing) { const b = $('#editBox'); b.focus(); b.setSelectionRange(b.value.length, b.value.length); }
+}
+
+function renderTray() {
+  $('#tray').innerHTML = S.pending.map((id) => {
+    const p = roll.find((x) => x.id === id);
+    return `<div class="thumb" style="--h:${p.h}">${p.emoji}<button class="x" data-unpend="${id}">✕</button></div>`;
+  }).join('');
+  updateSend();
+}
+function updateSend() { $('#sendBtn').disabled = !$('#input').value.trim() && !S.pending.length; }
+
+function renderClock() {
+  $('#clock').textContent = hm(S.now);
+  $('#sbTime').textContent = hm(S.now);
+  $('#todayLabel').textContent = dayLabel(S.now);
+}
+
+/* ───────────── 渲染：聊天 ───────────── */
+const SESSIONS = [
+  { t: '帮我看下这段 Kotlin', s: '可以把 remember 换成 rememberSaveable…' },
+  { t: '周末去哪', s: '如果想近一点，可以考虑…' },
+  { t: '早餐热量', s: '大约 520 kcal，已经写入健康' },
+];
+function renderChat() {
+  $('#sessions').innerHTML = SESSIONS.map((x) => `<div class="session"><div class="t">${esc(x.t)}</div><div class="s">${esc(x.s)}</div></div>`).join('');
+  $('#msgs').innerHTML = S.msgs.map((m) => `<div class="bubble ${m.me ? 'me' : 'ai'}">${m.q ? `<div class="q">${esc(m.q)}</div>` : ''}${esc(m.text)}</div>`).join('');
+  $('#msgs').scrollTop = $('#msgs').scrollHeight;
+  $('#quoteBox').innerHTML = S.quote ? `<div class="quote">${esc(S.quote.label)}<button class="x" data-act="dropQuote">✕</button></div>` : '';
+}
+
+function showView() {
+  const map = { today: 'viewToday', list: 'viewChatList', conv: 'viewConv' };
+  const id = S.tab === 'today' ? map.today : map[S.chatView];
+  document.querySelectorAll('.view').forEach((v) => v.classList.toggle('active', v.id === id));
+  document.querySelectorAll('.nav button').forEach((b) => b.classList.toggle('on', b.dataset.tab === S.tab));
+  // §1：只在两个 tab 的根页面显示底部栏
+  $('#nav').classList.toggle('hidden', S.tab === 'chat' && S.chatView === 'conv');
+  if (S.tab === 'today') renderToday(true); else renderChat();
+}
+
+/* ───────────── 交互：今日 ───────────── */
+function toast(msg) {
+  const t = $('#toast'); t.textContent = msg; t.classList.add('show');
+  clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.remove('show'), 1800);
+}
+function log(path, res) {
+  const el = $('#log');
+  el.innerHTML += `<div><span class="${res.ok ? 'ok' : 'no'}">${res.ok ? '显示' : '忽略'}</span> ${esc(path)} <span style="opacity:.6">· ${res.why}</span></div>`;
+  el.scrollTop = el.scrollHeight;
+}
+const tick = (sec) => { S.now = new Date(S.now.getTime() + sec * 1e3); renderClock(); };
+
+const EMOJI = [['🌇', 20], ['🍵', 100], ['🚲', 200], ['🌿', 120], ['🍰', 340], ['🎈', 0], ['📚', 220], ['🌙', 240], ['🐕', 30]];
+const pick = () => EMOJI[Math.floor(Math.random() * EMOJI.length)];
+const PLACES = ['静安寺附近', '愚园路', '常德路', '家附近'];
+
+$('#input').addEventListener('input', (e) => {
+  e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 140) + 'px';
+  updateSend();
+});
+$('#input').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); } });
+$('#sendBtn').addEventListener('click', send);
+
+// §2.3：在「今日」里拍照 → 已经写进 DCIM/Minis/，先放在输入框上方
+$('#camBtn').addEventListener('click', () => {
+  tick(7);
+  const [e, h] = pick();
+  const p = addPhoto(new Date(S.now), camPath(S.now, 'DCIM/Minis/MINIS_'), e, h, S.loc ? PLACES[0] : null);
+  log(p.path, classify(p.path));
+  S.pending.push(p.id);
+  renderTray();
+  toast('已存入相册 · DCIM/Minis');
+});
+
+function send() {
+  const text = $('#input').value.trim();
+  if (!text && !S.pending.length) return;
+  if (text) {
+    const n = addNote(new Date(S.now), text, { photos: [...S.pending], locating: S.loc });
+    if (S.loc) {
+      // §6.1：发送立刻上屏，位置在后台补上
+      setTimeout(() => {
+        n.locating = false;
+        n.lat = 31.22 + Math.random() / 100; n.lng = 121.44 + Math.random() / 100; n.acc = 10 + Math.floor(Math.random() * 30);
+        n.place = PLACES[Math.floor(Math.random() * PLACES.length)];
+        renderToday();
+      }, 1400);
+    }
+  } else {
+    toast(`${S.pending.length} 张照片已放回时间线`);
+  }
+  S.pending = [];
+  $('#input').value = ''; $('#input').style.height = 'auto';
+  renderTray();
+  renderToday(true);
+  tick(20);
+}
+
+$('#tray').addEventListener('click', (e) => {
+  const id = e.target.dataset.unpend;
+  if (!id) return;
+  S.pending = S.pending.filter((x) => x !== id);
+  roll.find((p) => p.id === id).deleted = true;   // 刚拍的，移除时一并从相册删掉
+  renderTray();
+  toast('已从相册删除这张照片');
+});
+
+/* 长按菜单（§2.4） */
+let pressT = null, longPressed = false;
+$('#timeline').addEventListener('pointerdown', (e) => {
+  const ent = e.target.closest('.entry');
+  if (!ent || S.editing) return;
+  longPressed = false;
+  ent.classList.add('pressing');
+  pressT = setTimeout(() => { longPressed = true; ent.classList.remove('pressing'); openSheet(ent); }, 500);
+});
+['pointerup', 'pointerleave', 'pointercancel'].forEach((ev) =>
+  $('#timeline').addEventListener(ev, () => { clearTimeout(pressT); document.querySelectorAll('.pressing').forEach((x) => x.classList.remove('pressing')); }));
+$('#timeline').addEventListener('scroll', () => clearTimeout(pressT));
+$('#timeline').addEventListener('contextmenu', (e) => {
+  const ent = e.target.closest('.entry');
+  if (ent) { e.preventDefault(); clearTimeout(pressT); longPressed = true; openSheet(ent); }
+});
+
+$('#timeline').addEventListener('click', (e) => {
+  if (longPressed) { longPressed = false; return; }
+  const act = e.target.dataset.act;
+  if (act === 'grant') { setPerm('full'); return; }
+  if (act === 'cancelEdit') { S.editing = null; renderToday(); return; }
+  if (act === 'saveEdit') {
+    const n = notes.find((x) => x.id === S.editing);
+    const v = $('#editBox').value.trim();
+    if (v && v !== n.text) { n.text = v; n.edited = new Date(S.now); }
+    S.editing = null; renderToday(); return;
+  }
+  const th = e.target.closest('.thumb[data-photo]');
+  if (th) {
+    const ent = th.closest('.entry');
+    const ids = ent.dataset.group ? ent.dataset.group.split(',') : notes.find((n) => n.id === ent.dataset.note).photos;
+    openViewer(ids.map((id) => roll.find((p) => p.id === id)).filter((p) => !p.deleted), th.dataset.photo);
+  }
+});
+
+function openSheet(ent) {
+  const note = ent.dataset.note && notes.find((n) => n.id === ent.dataset.note);
+  const ids = ent.dataset.group ? ent.dataset.group.split(',') : null;
+  const peek = note ? note.text.split('\n')[0] : `📷 ${ids.length} 张照片`;
+  const btns = note
+    ? `<button data-s="ask">💬 问问 Minis</button><button data-s="edit">✏️ 编辑</button><button data-s="copy">📋 复制文字</button><button data-s="del" class="danger">🗑 删除</button>`
+    : `<button data-s="ask">💬 问问 Minis</button><button data-s="album">🖼 在相册中打开</button>`;
+  $('#sheet').innerHTML = `<div class="grab"></div><div class="peek">${esc(peek)}</div>${btns}`;
+  $('#sheet').onclick = (e) => {
+    const s = e.target.dataset.s; if (!s) return;
+    closeSheet();
+    if (s === 'ask') askMinis(note, ids);
+    if (s === 'edit') { S.editing = note.id; renderToday(); }
+    if (s === 'copy') toast('已复制');
+    if (s === 'album') toast('（原型）打开系统相册');
+    if (s === 'del' && confirm('删除这条碎碎念？\n挂在下面的照片会留在相册里。')) {
+      notes.splice(notes.indexOf(note), 1); renderToday();
+    }
+  };
+  $('#scrim').classList.add('show'); $('#sheet').classList.add('show');
+}
+function closeSheet() { $('#scrim').classList.remove('show'); $('#sheet').classList.remove('show'); }
+$('#scrim').addEventListener('click', closeSheet);
+
+function openViewer(list, startId) {
+  const v = $('#viewer');
+  const grid = () => {
+    v.innerHTML = `<div class="vbar"><button data-v="close">✕</button><span>${list.length} 张</span></div>
+      <div class="vgrid">${list.map((p) => `<div class="thumb" style="--h:${p.h}" data-v="one" data-id="${p.id}">${p.emoji}</div>`).join('')}</div>`;
+  };
+  const one = (id) => {
+    const i = list.findIndex((p) => p.id === id), p = list[i];
+    v.innerHTML = `<div class="vbar"><button data-v="grid">‹</button><span>${i + 1} / ${list.length}</span>
+      <span style="margin-left:auto"><button data-v="prev">←</button><button data-v="next">→</button></span></div>
+      <div class="big" style="background:linear-gradient(135deg,hsl(${p.h} 60% 40%),hsl(${p.h + 40} 60% 25%))">${p.emoji}</div>
+      <div class="cap">${hm(p.at)}${p.place && S.loc ? ' · 📍 ' + esc(p.place) : ''}<br>${esc(p.path)}</div>`;
+    v.dataset.cur = id;
+  };
+  v.onclick = (e) => {
+    const a = e.target.closest('[data-v]'); if (!a) return;
+    const k = a.dataset.v, i = list.findIndex((p) => p.id === v.dataset.cur);
+    if (k === 'close') v.classList.remove('show');
+    if (k === 'grid') grid();
+    if (k === 'one') one(a.dataset.id);
+    if (k === 'prev') one(list[(i - 1 + list.length) % list.length].id);
+    if (k === 'next') one(list[(i + 1) % list.length].id);
+  };
+  // §2.5：多张先进网格，一张直接看大图
+  list.length > 1 ? grid() : one(list[0].id);
+  v.classList.add('show');
+}
+
+/* ───────────── 问问 Minis → 聊天 ───────────── */
+function askMinis(note, ids) {
+  const label = note ? `${hm(note.at)} · ${note.text.replace(/\n/g, ' ')}` : `📷 ${ids.length} 张照片 · ${hm(roll.find((p) => p.id === ids[0]).at)}`;
+  S.quote = { label };
+  S.msgs = [];
+  S.tab = 'chat'; S.chatView = 'conv';
+  $('#convTitle').textContent = '新对话';
+  showView();
+  $('#chatInput').focus();
+}
+function chatSend() {
+  const text = $('#chatInput').value.trim();
+  if (!text && !S.quote) return;
+  S.msgs.push({ me: true, text: text || '帮我看看这条', q: S.quote && S.quote.label });
+  S.quote = null; $('#chatInput').value = '';
+  renderChat();
+  setTimeout(() => {
+    S.msgs.push({ me: false, text: '（原型）这里由 agent 回答。它可以用 file_read 读取 /var/minis/journal/ 下的文件，照片则用 android-photos 按日期查询。' });
+    renderChat();
+  }, 700);
+}
+$('#chatSend').addEventListener('click', chatSend);
+$('#chatInput').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); chatSend(); } });
+$('#quoteBox').addEventListener('click', (e) => { if (e.target.dataset.act === 'dropQuote') { S.quote = null; renderChat(); } });
+$('#backBtn').addEventListener('click', () => { S.chatView = 'list'; showView(); });
+$('#newChat').addEventListener('click', () => { S.quote = null; S.msgs = []; S.chatView = 'conv'; showView(); });
+$('#sessions').addEventListener('click', (e) => {
+  const s = e.target.closest('.session'); if (!s) return;
+  S.quote = null; S.msgs = []; $('#convTitle').textContent = s.querySelector('.t').textContent; S.chatView = 'conv'; showView();
+});
+$('#nav').addEventListener('click', (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  S.tab = b.dataset.tab; if (S.tab === 'chat' && S.chatView === 'conv' && !S.msgs.length && !S.quote) S.chatView = 'list';
+  showView();
+});
+$('#moreBtn').addEventListener('click', () => toast('（原型）今日设置：包含的相册、记录位置'));
+
+/* ───────────── 控制面板 ───────────── */
+document.querySelectorAll('[data-adv]').forEach((b) => b.addEventListener('click', () => { tick(+b.dataset.adv * 60); renderToday(); }));
+
+function simulate(path, emoji, h, place) {
+  tick(5);
+  const p = addPhoto(new Date(S.now), path, emoji, h, place);
+  const res = classify(p.path);
+  log(p.path, res);
+  if (S.tab !== 'today') { S.tab = 'today'; showView(); } else renderToday(true);
+  if (res.ok && canSee(p)) {
+    const el = [...document.querySelectorAll('.entry.photo')].find((x) => x.dataset.group.split(',').includes(p.id));
+    if (el) { el.classList.add('flash'); }
+    toast('新照片已出现在时间线');
+  } else if (res.ok) toast('照片已拍，但当前权限下看不到');
+  else toast('已忽略：' + res.why);
+}
+$('#simCamera').addEventListener('click', () => { const [e, h] = pick(); simulate(camPath(new Date(S.now.getTime() + 5e3)), e, h, PLACES[Math.floor(Math.random() * PLACES.length)]); });
+$('#simWeixin').addEventListener('click', () => simulate(`Pictures/WeiXin/mmexport${S.now.getTime()}.jpg`, '🧧', 0, null));
+$('#simShot').addEventListener('click', () => simulate(`Pictures/Screenshots/Screenshot_${stamp(S.now)}.png`, '🧾', 260, null));
+$('#simDelete').addEventListener('click', () => {
+  const live = roll.filter((p) => !p.deleted && classify(p.path).ok).sort((a, b) => b.at - a.at)[0];
+  if (!live) return;
+  live.deleted = true;
+  log(live.path, { ok: false, why: '已在相册删除' });
+  S.pending = S.pending.filter((x) => x !== live.id); renderTray();
+  renderToday();
+  toast(notes.some((n) => n.photos.includes(live.id)) ? '碎碎念里显示「照片不在这台手机上」' : '照片组已更新');
+});
+
+function setPerm(v) {
+  S.perm = v;
+  document.querySelectorAll('#permSeg button').forEach((b) => b.classList.toggle('on', b.dataset.perm === v));
+  renderToday();
+}
+$('#permSeg').addEventListener('click', (e) => e.target.dataset.perm && setPerm(e.target.dataset.perm));
+$('#gapSeg').addEventListener('click', (e) => {
+  if (!e.target.dataset.gap) return;
+  S.gap = +e.target.dataset.gap;
+  document.querySelectorAll('#gapSeg button').forEach((b) => b.classList.toggle('on', b === e.target));
+  renderToday();
+});
+$('#locToggle').addEventListener('change', (e) => { S.loc = e.target.checked; renderToday(); });
+$('#darkToggle').addEventListener('change', (e) => document.body.classList.toggle('dark', e.target.checked));
+
+/* §4：生成 journal 文件 */
+function attr(v) {
+  const s = String(v);
+  if (!/[\s,"&]|[^\x00-\x7f]|--/.test(s)) return s;
+  return '"' + s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/--/g, '&#45;&#45;') + '"';
+}
+function journalFor(d) {
+  const list = notes.filter((n) => sameDay(n.at, d)).sort((a, b) => a.at - b.at);
+  let out = `---\ndate: ${dayKey(d)}\n---\n`;
+  for (const n of list) {
+    const kv = [['id', n.id], ['at', iso(n.at)]];
+    if (n.edited) kv.push(['edited', iso(n.edited)]);
+    if (n.lat != null && S.loc) kv.push(['lat', n.lat.toFixed(5)], ['lng', n.lng.toFixed(5)], ['acc', n.acc]);
+    if (n.place && S.loc) kv.push(['place', n.place]);
+    const ph = n.photos.map((id) => roll.find((p) => p.id === id)).filter(Boolean).map((p) => p.path);
+    if (ph.length) kv.push(['photos', ph.join(',')]);
+    const body = n.text.replace(/<!-- minis:entry/g, '&lt;!-- minis:entry');
+    out += `\n## ${hm(n.at)}\n<!-- minis:entry ${kv.map(([k, v]) => `${k}=${attr(v)}`).join(' ')} -->\n${body}\n`;
+  }
+  return out;
+}
+$('#showJournal').addEventListener('click', () => {
+  const d = S.now;
+  $('#modalTitle').textContent = `/var/minis/journal/${d.getFullYear()}/${pad(d.getMonth() + 1)}/${dayKey(d)}.md`;
+  $('#modalBody').textContent = journalFor(d);
+  $('#modal').classList.add('show');
+});
+$('#modalClose').addEventListener('click', () => $('#modal').classList.remove('show'));
+$('#modal').addEventListener('click', (e) => { if (e.target.id === 'modal') $('#modal').classList.remove('show'); });
+
+/* 初始日志 */
+roll.slice().sort((a, b) => a.at - b.at).forEach((p) => log(p.path, classify(p.path)));
+renderClock(); renderTray(); showView();
+</script>
+</body>
+</html>
