@@ -2349,6 +2349,7 @@
     <string name="backup_category_journal">Today Journal</string>
     <string name="backup_count_journal">%1$d entries · %2$s</string>
     <string name="backup_journal_photos_note">Today Journal photos stay in your photo library and are backed up with it, not in this package.</string>
+    <string name="today_by_minis">by Minis</string>
     <string name="today_remove_photo">Remove photo</string>
     <string name="shared_folder_name_journal">Today Journal</string>
 </resources>

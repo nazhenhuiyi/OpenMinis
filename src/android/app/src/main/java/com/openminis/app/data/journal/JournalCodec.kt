@@ -24,6 +24,9 @@ data class JournalEntry(
     val accuracyM: Int? get() = attrs[KEY_ACC]?.toDoubleOrNull()?.toInt()
     val place: String? get() = attrs[KEY_PLACE]?.takeIf { it.isNotBlank() }
 
+    /** Who last wrote the text: absent = the user, [BY_MINIS] = the agent. */
+    val writtenByMinis: Boolean get() = attrs[KEY_BY] == BY_MINIS
+
     /** Relative paths inside the system photo library, e.g. `DCIM/Minis/MINIS_20261011_162031.jpg`. */
     val photos: List<String>
         get() = attrs[KEY_PHOTOS]?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }.orEmpty()
@@ -46,6 +49,8 @@ data class JournalEntry(
         const val KEY_ACC = "acc"
         const val KEY_PLACE = "place"
         const val KEY_PHOTOS = "photos"
+        const val KEY_BY = "by"
+        const val BY_MINIS = "minis"
 
         fun create(id: String, at: OffsetDateTime, body: String, photos: List<String> = emptyList()): JournalEntry {
             val attrs = linkedMapOf(KEY_ID to id, KEY_AT to JournalCodec.formatTime(at))

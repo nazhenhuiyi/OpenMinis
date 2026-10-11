@@ -2145,6 +2145,7 @@
     <string name="backup_category_journal">今日記錄</string>
     <string name="backup_count_journal">%1$d 則 · %2$s</string>
     <string name="backup_journal_photos_note">「今日」的照片由系統相簿備份，不包含在這裡。</string>
+    <string name="today_by_minis">Minis 寫的</string>
     <string name="today_remove_photo">移除照片</string>
     <string name="shared_folder_name_journal">今日記錄</string>
 </resources>

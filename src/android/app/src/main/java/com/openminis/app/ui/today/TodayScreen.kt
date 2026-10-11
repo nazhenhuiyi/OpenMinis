@@ -454,11 +454,15 @@ private fun TimelineRow(
     onLongPress: () -> Unit,
     onClick: (() -> Unit)? = null,
     tag: String,
+    byMinis: Boolean = false,
     content: @Composable () -> Unit,
 ) {
     val time = remember(atMs) { DateTimeFormatter.ofPattern("HH:mm").format(Instant.ofEpochMilli(atMs).atZone(zone)) }
     val editedLabel = stringResource(R.string.today_edited)
-    val caption = listOfNotNull(time, place, editedLabel.takeIf { edited }).joinToString("  ·  ")
+    // Words the agent wrote or last changed say so (SPEC §4.6); "edited" is implied.
+    val byMinisLabel = stringResource(R.string.today_by_minis)
+    val caption = listOfNotNull(time, place, byMinisLabel.takeIf { byMinis }, editedLabel.takeIf { edited && !byMinis })
+        .joinToString("  ·  ")
     Column(
         Modifier.fillMaxWidth().padding(bottom = 20.dp).clip(RoundedCornerShape(12.dp))
             .combinedClickable(onClick = { onClick?.invoke() }, onLongClick = onLongPress)
@@ -497,6 +501,7 @@ private fun NoteRow(
         locating = locating,
         onLongPress = onLongPress,
         tag = "today_note",
+        byMinis = note.entry.writtenByMinis,
     ) {
         if (editing) {
             var text by rememberSaveable(note.entry.id) { mutableStateOf(note.entry.body) }

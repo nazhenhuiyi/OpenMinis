@@ -13127,6 +13127,8 @@ class ChatViewModel(
                     toolDisabledResult("browser_use")
                 }
             "memory_write" -> executeMemoryWriteTool(argsJson)
+            // [T-today-tab] Journal reads/writes go through JournalStore (SPEC §4.6).
+            com.openminis.app.tools.JournalTool.NAME -> com.openminis.app.tools.JournalTool.execute(context, argsJson)
             // [T-sub-agents-v1] One tool, five actions. The legacy names are
             // accepted so a replayed call from a transcript written before the
             // rename still dispatches instead of hitting "Unknown tool".
@@ -15185,7 +15187,7 @@ Shared directory /var/minis/ (bidirectional read/write between shell and app):
   /var/minis/shared/      — Cross-session shared storage for artifacts and documents. Organize by project or topic (e.g. shared/myproject/, shared/datasets/). Do NOT store temporary files here.
   /var/minis/memory/GLOBAL.md    — Persistent global memory (read-only, user-maintained via Settings).
   /var/minis/memory/YYYY-MM-DD.md — Daily memory log.
-  /var/minis/journal/YYYY/MM/YYYY-MM-DD.md — The user's own journal from the Today tab (read-only). Each entry starts with "## HH:MM" followed by a "<!-- minis:entry id=… at=… -->" metadata line (may carry lat/lng/place and photos=DCIM/… paths in the phone's photo library). Read it when the user asks what they did, wrote or photographed.
+  /var/minis/journal/YYYY/MM/YYYY-MM-DD.md — The user's own journal from the Today tab. Each entry starts with "## HH:MM" followed by a "<!-- minis:entry id=… at=… -->" metadata line (may carry lat/lng/place and photos=DCIM/… paths in the phone's photo library). Read it when the user asks what they did, wrote or photographed. To add, edit or delete entries use the journal tool — never file_write/file_edit/shell on these files.
   /var/minis/mounts/<name>/      — User-mounted external folders from Settings → Mount External Folders. Presence and names vary per user; check this directory first when the task references external/user files. Some mounts may be read-only — file_write / file_edit will reject writes with a clear error message.
 
 The minis:// URL scheme:
@@ -17515,6 +17517,7 @@ Scheduled tasks: crontab / at / nohup loops will stop when the app is suspended,
         "read_image" -> "Read Image"
         "memory_write" -> "Write Memory"
         "memory_get" -> "Read Memory"
+        "journal" -> "Journal"
         "web_search" -> "Search Web"
         else -> toolName
             .split('_')

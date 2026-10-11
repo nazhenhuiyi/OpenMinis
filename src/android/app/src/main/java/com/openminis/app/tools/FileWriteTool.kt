@@ -78,8 +78,8 @@ object FileWriteTool {
             // [T-today-tab] The user's journal is read-only to the agent.
             if (PRootKernel.isJournalPath(path)) {
                 return ToolExecutionResult(
-                    "Error: $path is the user's journal (/var/minis/journal), which is read-only. " +
-                        "Quote it or save notes to memory instead.",
+                    "Error: $path is the user's journal (/var/minis/journal) and cannot be written as a raw file. " +
+                        "Use the journal tool (action add/edit/delete) so ids and metadata stay intact.",
                     false, toolTitle = toolTitle,
                 )
             }

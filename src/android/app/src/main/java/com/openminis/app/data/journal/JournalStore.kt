@@ -53,16 +53,44 @@ class JournalStore(
             .toList()
     }
 
-    /** New entry stamped now, appended to today's file (date in the local zone, §4.1). */
-    suspend fun add(body: String, photos: List<String> = emptyList()): JournalEntry {
-        val now = clock()
-        val entry = JournalEntry.create(Ulid.generate(now.toInstant().toEpochMilli()), now, body.trim(), photos)
-        mutate(now.toLocalDate()) { text -> JournalCodec.append(text, now.toLocalDate(), entry) }
+    /**
+     * New entry, appended to the file of its own local day (§4.1). [at] defaults
+     * to now; the agent may backfill a past moment ("log yesterday's film").
+     * [by] marks who wrote it — null for the user, [JournalEntry.BY_MINIS] for the agent.
+     */
+    suspend fun add(
+        body: String,
+        photos: List<String> = emptyList(),
+        at: OffsetDateTime? = null,
+        by: String? = null,
+    ): JournalEntry {
+        val time = at ?: clock()
+        var entry = JournalEntry.create(Ulid.generate(time.toInstant().toEpochMilli()), time, body.trim(), photos)
+        if (by != null) entry = entry.withAttrs(mapOf(JournalEntry.KEY_BY to by))
+        mutate(time.toLocalDate()) { text -> JournalCodec.append(text, time.toLocalDate(), entry) }
         return entry
     }
 
-    suspend fun editBody(date: LocalDate, id: String, body: String): Boolean =
-        update(date, id) { it.copy(body = body.trim()).withAttrs(mapOf(JournalEntry.KEY_EDITED to JournalCodec.formatTime(clock()))) }
+    /**
+     * Replace an entry's text. [by] records who wrote the new text: an edit in
+     * the app clears the agent mark (the words are the user's again), an agent
+     * edit sets it.
+     */
+    suspend fun editBody(date: LocalDate, id: String, body: String, by: String? = null): Boolean =
+        update(date, id) {
+            it.copy(body = body.trim()).withAttrs(
+                mapOf(JournalEntry.KEY_EDITED to JournalCodec.formatTime(clock()), JournalEntry.KEY_BY to by),
+            )
+        }
+
+    /** Locate an entry by id across all day files, newest day first. */
+    suspend fun find(id: String): Pair<LocalDate, JournalEntry>? {
+        for (day in availableDays()) {
+            val e = readDay(day)?.entries?.firstOrNull { it.id == id } ?: continue
+            return day to e
+        }
+        return null
+    }
 
     suspend fun setAttrs(date: LocalDate, id: String, attrs: Map<String, String?>): Boolean =
         update(date, id) { it.withAttrs(attrs) }

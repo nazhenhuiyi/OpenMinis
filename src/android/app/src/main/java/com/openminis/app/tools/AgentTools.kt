@@ -55,6 +55,9 @@ object AgentTools {
             add(ReadImageTool.definition())
         }
         if (browserEnabled) add(browserUseDefinition())
+        // [T-today-tab] Journal access is the main agent's; helpers can still
+        // file_read /var/minis/journal.
+        if (!isHelper) add(JournalTool.definition())
         if (memoryEnabled) {
             if (!isHelper) add(memoryWriteDefinition())
             add(memoryGetDefinition())

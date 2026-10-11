@@ -12,6 +12,7 @@ import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.ui.graphics.Color
 
@@ -61,6 +62,7 @@ internal fun toolAccentColor(toolName: String): Color = when (toolName) {
     "browser_use" -> Color(0xFF007AFF)
     "read_image" -> Color(0xFFAF52DE)
     "memory_write", "memory_get" -> Color(0xFFFF2D55)
+    "journal" -> Color(0xFFFF9F0A)        // [T-today-tab] amber, as the Today tab
     "web_search" -> Color(0xFF32ADE6)    // iOS: .cyan for search
     // [T-sub-agents-v1] Current name + the pre-rename one still in shipped transcripts.
     "subagent_task", "delegate_task", "agent_status" -> HelperAccentStatic  // iOS: HelperAccent.color (electric violet)
@@ -76,6 +78,7 @@ internal fun toolIconFor(toolName: String) = when (toolName) {
     "browser_use" -> Icons.Default.Language            // iOS: globe
     "read_image" -> Icons.Default.Image                // iOS: photo
     "memory_write", "memory_get" -> Icons.Default.Psychology // iOS: brain.head.profile
+    "journal" -> Icons.Default.WbSunny                 // [T-today-tab]
     "web_search" -> Icons.Default.Search               // iOS: magnifyingglass
     "subagent_task", "delegate_task", "agent_status" -> Icons.Default.Groups  // iOS: person.2.wave.2
     else -> Icons.Default.Build
@@ -96,6 +99,7 @@ internal fun toolIconResFor(toolName: String?): Int = when (toolName) {
     "browser_use" -> R.drawable.ic_tool_globe
     "read_image" -> R.drawable.ic_tool_image
     "memory_write", "memory_get" -> R.drawable.ic_tool_psychology
+    "journal" -> R.drawable.ic_tool_edit_note
     "web_search" -> R.drawable.ic_tool_search
     "subagent_task", "delegate_task", "agent_status" -> R.drawable.ic_tool_groups
     else -> R.drawable.ic_tool_build
@@ -112,6 +116,7 @@ internal fun toolAccentColorInt(toolName: String?): Int = when (toolName) {
     "browser_use" -> 0xFF007AFF.toInt()
     "read_image" -> 0xFFAF52DE.toInt()
     "memory_write", "memory_get" -> 0xFFFF2D55.toInt()
+    "journal" -> 0xFFFF9F0A.toInt()
     "web_search" -> 0xFF32ADE6.toInt()
     "subagent_task", "delegate_task", "agent_status" -> 0xFFAF52DE.toInt()
     else -> 0xFF8E8E93.toInt()
@@ -136,6 +141,7 @@ internal fun friendlyToolTitleFor(toolName: String?): String = when (toolName) {
     "read_image" -> "Read Image"
     "memory_write" -> "Write Memory"
     "memory_get" -> "Read Memory"
+    "journal" -> "Journal"
     "web_search" -> "Search Web"
     else -> toolName
         .split('_')
@@ -153,6 +159,7 @@ internal fun toolDisplayName(toolName: String): String = when (toolName) {
     "read_image" -> "image viewer"
     "memory_write" -> "memory"
     "memory_get" -> "memory"
+    "journal" -> "journal"
     "web_search" -> "search"
     "subagent_task", "delegate_task", "agent_status" -> "agent"
     else -> toolName
@@ -170,6 +177,7 @@ internal fun toolTitleLabel(toolName: String): String = when (toolName) {
     "browser_use" -> "Minis is using Browser"
     "read_image" -> "Minis is reading Image"
     "memory_write", "memory_get" -> "Minis is using Memory"
+    "journal" -> "Minis is using Journal"
     "web_search" -> "Minis is using Search"
     "subagent_task", "delegate_task", "agent_status" -> "Minis is using an Agent"
     else -> "Minis is using ${toolDisplayName(toolName)}"
