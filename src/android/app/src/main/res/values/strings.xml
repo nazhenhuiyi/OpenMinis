@@ -2372,7 +2372,7 @@
     <string name="today_habits_tick_body">Undo today\'s check-in?</string>
     <string name="today_habits_undo">Undo</string>
     <string name="today_habits_manage">Manage</string>
-    <string name="today_habits_hint">Tap to complete · tap again or long-press to change</string>
+    <string name="today_habits_hint">Tap to add a set · long-press to change</string>
     <string name="today_habits_ghost">Check-ins</string>
     <string name="today_habits_a11y">Today\'s check-ins, %1$d of %2$d done</string>
     <string name="today_habits_fill">Fill up</string>

@@ -456,9 +456,10 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
     // ── Daily check-ins (SPEC §14) ────────────────────────────────────────
 
     /** Tap on an open habit: fill it to its goal. Done ones go to the adjust panel instead (§14.3). */
-    fun completeHabit(habitId: String) {
+    /** One tap in the sheet: add [by] to today's total (§14.3). */
+    fun stepHabit(habitId: String, by: Int) {
         val p = _state.value.todayHabits.firstOrNull { it.habit.id == habitId } ?: return
-        if (!p.complete) setHabitDone(p.habit, p.habit.goal)
+        if (!p.complete) setHabitDone(p.habit, p.done + by)
     }
 
     /** Set today's total (adjust panel), 0 = undo. Always today — no backfilling (§14.1). */

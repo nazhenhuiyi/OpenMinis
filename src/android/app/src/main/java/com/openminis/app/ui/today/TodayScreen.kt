@@ -411,7 +411,7 @@ fun TodayScreen(
                 habits = state.todayHabits,
                 editingId = sheetEditing,
                 onEditingChange = { sheetEditing = it },
-                onComplete = vm::completeHabit,
+                onStep = vm::stepHabit,
                 onSet = vm::setHabitDone,
                 onManage = { sheetOpen = false; showHabits = true },
             )

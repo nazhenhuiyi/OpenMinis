@@ -141,7 +141,7 @@ fun HabitsSheetContent(
     habits: List<HabitProgress>,
     editingId: String?,
     onEditingChange: (String?) -> Unit,
-    onComplete: (String) -> Unit,
+    onStep: (habitId: String, by: Int) -> Unit,
     onSet: (Habit, Int) -> Unit,
     onManage: () -> Unit,
 ) {
@@ -166,7 +166,7 @@ fun HabitsSheetContent(
         // A fling at the top of the list must not carry on into the sheet and close it.
         LazyColumn(Modifier.heightIn(max = 420.dp).nestedScroll(rememberSheetScrollGuard())) {
             items(habits, key = { it.habit.id ?: it.habit.name }) { p ->
-                CheckInRow(p, large = true, onComplete = onComplete, onAdjust = { onEditingChange(it) })
+                CheckInRow(p, large = true, onStep = onStep, onAdjust = { onEditingChange(it) })
             }
         }
         Text(
@@ -182,7 +182,7 @@ fun HabitsSheetContent(
  * A day's check-ins as one block at the top of the day (§14.3): a quiet
  * "打卡 2/3" caption over one line per habit. Everything listed is counted,
  * so the caption always matches what you see. Tap and long-press both open
- * the adjust panel — in the timeline nothing is completed by a single touch;
+ * the adjust panel — in the timeline nothing is recorded by a single touch;
  * the top-bar sheet is the quick way.
  */
 @Composable
@@ -195,7 +195,7 @@ fun CheckInBlock(items: List<HabitProgress>, onAdjust: (String) -> Unit) {
             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
             modifier = Modifier.padding(bottom = 2.dp),
         )
-        for (p in items) CheckInRow(p, large = false, onComplete = null, onAdjust = onAdjust)
+        for (p in items) CheckInRow(p, large = false, onStep = null, onAdjust = onAdjust)
     }
 }
 
@@ -207,17 +207,18 @@ fun CheckInBlock(items: List<HabitProgress>, onAdjust: (String) -> Unit) {
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun CheckInRow(p: HabitProgress, large: Boolean, onComplete: ((String) -> Unit)?, onAdjust: (String) -> Unit) {
+private fun CheckInRow(p: HabitProgress, large: Boolean, onStep: ((habitId: String, by: Int) -> Unit)?, onAdjust: (String) -> Unit) {
     val haptics = LocalHapticFeedback.current
     val id = p.habit.id
     Row(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
             .combinedClickable(
                 enabled = p.editable && id != null,
+                // Sheet: each tap records one set, sized to the goal (§14.3); a done item opens adjust.
                 onClick = {
-                    if (p.complete || onComplete == null) onAdjust(id!!) else {
+                    if (p.complete || onStep == null) onAdjust(id!!) else {
                         haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                        onComplete(id!!)
+                        onStep(id!!, quickSteps(p.habit.goal).first())
                     }
                 },
                 onLongClick = { onAdjust(id!!) },

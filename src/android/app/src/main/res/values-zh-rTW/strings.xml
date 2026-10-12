@@ -2168,7 +2168,7 @@
     <string name="today_habits_tick_body">取消今天的打卡？</string>
     <string name="today_habits_undo">取消打卡</string>
     <string name="today_habits_manage">管理</string>
-    <string name="today_habits_hint">點一下完成 · 再點或長按可以修改</string>
+    <string name="today_habits_hint">點一下記一組 · 長按修改</string>
     <string name="today_habits_ghost">打卡</string>
     <string name="today_habits_a11y">今日打卡，已完成 %1$d 項，共 %2$d 項</string>
     <string name="today_habits_fill">補滿</string>
