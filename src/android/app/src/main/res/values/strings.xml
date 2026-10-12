@@ -2393,4 +2393,16 @@
     <string name="weather_showers">Showers</string>
     <string name="weather_thunder">Thunderstorm</string>
     <string name="weather_unknown">Weather</string>
+    <string name="today_settings_weather_alerts">Weather alerts</string>
+    <string name="weather_alert_title">Weather alert</string>
+    <string name="weather_alert_channel">Weather alerts</string>
+    <string name="weather_alert_channel_description">Rain about to start, storms, strong wind and extreme temperatures in the next couple of hours</string>
+    <string name="weather_alert_storm">⛈ Thunderstorms around %1$s — stay indoors and away from trees and high ground.</string>
+    <string name="weather_alert_heavy">🌧 Heavy rain or snow around %1$s — take care if you go out, or leave a little later.</string>
+    <string name="weather_alert_rain">🌧 Rain likely from about %1$s — take an umbrella.</string>
+    <string name="weather_alert_wind">🌬 Strong gusts around %1$s (about %2$d km/h) — watch for falling objects, bring things in from the balcony.</string>
+    <string name="weather_alert_heat">🥵 Up to %1$d° today — avoid the midday sun and drink plenty of water.</string>
+    <string name="weather_alert_cold">🥶 Down to %1$d° today — dress warmly; roads may be icy.</string>
+    <string name="weather_alert_drop">🍂 %1$d° colder than yesterday — take an extra layer.</string>
+    <string name="weather_alert_habit">Today\'s “%1$s” isn\'t done yet — move it indoors, or get it done before the weather turns.</string>
 </resources>

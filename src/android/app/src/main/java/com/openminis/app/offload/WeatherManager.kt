@@ -87,6 +87,18 @@ object WeatherManager {
             "&daily=weather_code,temperature_2m_max,temperature_2m_min&forecast_days=1&timezone=auto",
     )
 
+    /**
+     * [T-today-weather-alerts] What the hourly weather-alert check needs (SPEC
+     * §16): rain/code now, the next few hours' precipitation, codes and gusts,
+     * and yesterday's + today's max/min for heat, cold and sudden drops.
+     */
+    fun fetchAlertJson(latitude: Double, longitude: Double): JSONObject? = getJson(
+        "$BASE_URL?latitude=$latitude&longitude=$longitude" +
+            "&current=precipitation,weather_code" +
+            "&hourly=precipitation_probability,precipitation,weather_code,wind_gusts_10m&forecast_hours=4" +
+            "&daily=temperature_2m_max,temperature_2m_min&past_days=1&forecast_days=1&timezone=auto",
+    )
+
     private fun formatWeatherResponse(json: JSONObject, lat: Double, lon: Double): String {
         val sb = StringBuilder()
         val timezone = json.optString("timezone", "unknown")

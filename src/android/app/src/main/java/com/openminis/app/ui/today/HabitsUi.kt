@@ -44,18 +44,25 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.geometry.Offset
@@ -77,6 +84,9 @@ import com.openminis.app.data.journal.HabitProgress
 import java.time.DayOfWeek
 import java.time.format.TextStyle
 import java.util.Locale
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 
 /**
  * [T-today-habits] Today's check-in progress in the top bar
@@ -171,10 +181,12 @@ fun HabitsSheetContent(
 /**
  * A day's check-ins as one block at the top of the day (§14.3): a quiet
  * "打卡 2/3" caption over one line per habit. Everything listed is counted,
- * so the caption always matches what you see.
+ * so the caption always matches what you see. Tap and long-press both open
+ * the adjust panel — in the timeline nothing is completed by a single touch;
+ * the top-bar sheet is the quick way.
  */
 @Composable
-fun CheckInBlock(items: List<HabitProgress>, onComplete: (String) -> Unit, onAdjust: (String) -> Unit) {
+fun CheckInBlock(items: List<HabitProgress>, onAdjust: (String) -> Unit) {
     val done = items.count { it.complete }
     Column(Modifier.fillMaxWidth().padding(bottom = 16.dp).testTag("today_checkins")) {
         Text(
@@ -183,18 +195,19 @@ fun CheckInBlock(items: List<HabitProgress>, onComplete: (String) -> Unit, onAdj
             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
             modifier = Modifier.padding(bottom = 2.dp),
         )
-        for (p in items) CheckInRow(p, large = false, onComplete = onComplete, onAdjust = onAdjust)
+        for (p in items) CheckInRow(p, large = false, onComplete = null, onAdjust = onAdjust)
     }
 }
 
 /**
- * One habit: ring, name, "30/50 个". Editable rows: tap completes an open
- * habit; tap on a done one, or long-press, adjusts — a stray tap never undoes
- * anything silently. Read-only rows (past days) ignore touches.
+ * One habit: ring, name, "30/50 个". Editable rows: with [onComplete], tap
+ * completes an open habit; otherwise (or on a done one) tap adjusts, as does
+ * long-press — a stray tap never undoes anything silently. Read-only rows
+ * (past days) ignore touches.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun CheckInRow(p: HabitProgress, large: Boolean, onComplete: (String) -> Unit, onAdjust: (String) -> Unit) {
+private fun CheckInRow(p: HabitProgress, large: Boolean, onComplete: ((String) -> Unit)?, onAdjust: (String) -> Unit) {
     val haptics = LocalHapticFeedback.current
     val id = p.habit.id
     Row(
@@ -202,7 +215,7 @@ private fun CheckInRow(p: HabitProgress, large: Boolean, onComplete: (String) ->
             .combinedClickable(
                 enabled = p.editable && id != null,
                 onClick = {
-                    if (p.complete) onAdjust(id!!) else {
+                    if (p.complete || onComplete == null) onAdjust(id!!) else {
                         haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                         onComplete(id!!)
                     }
@@ -321,6 +334,40 @@ private fun HabitAdjustPanel(p: HabitProgress, onSet: (Int) -> Unit, onBack: () 
     }
 }
 
+/**
+ * Coming from a number field, some IMEs (seen with Doubao) keep showing the
+ * digit pad when focus lands on a text field: they ignore the restartInput
+ * Compose sends while the keyboard stays up. The number field marks that it
+ * was left ([leftNumberField]); the text field that takes focus next briefly
+ * hides and re-shows the keyboard ([reopenKeyboardAfterNumber]), which makes
+ * every IME read the new input type. Other focus moves (opening the dialog)
+ * leave the keyboard alone.
+ */
+private class NumberFieldExit {
+    var focused = false
+    var pending = false
+}
+
+private fun Modifier.leftNumberField(exit: NumberFieldExit): Modifier = onFocusChanged { state ->
+    if (exit.focused && !state.isFocused) exit.pending = true
+    exit.focused = state.isFocused
+}
+
+private fun Modifier.reopenKeyboardAfterNumber(exit: NumberFieldExit): Modifier = composed {
+    val keyboard = LocalSoftwareKeyboardController.current
+    val scope = rememberCoroutineScope()
+    onFocusChanged { state ->
+        if (state.isFocused && exit.pending) {
+            exit.pending = false
+            scope.launch {
+                keyboard?.hide()
+                delay(60)
+                keyboard?.show()
+            }
+        }
+    }
+}
+
 /** Quick-add steps sized to the goal: 20 push-ups → +5 +10, 5 km → +1 +2. */
 private fun quickSteps(target: Int): List<Int> = when {
     target >= 40 -> listOf(10, 20)
@@ -406,7 +453,13 @@ private fun HabitEditDialog(
     var confirmDelete by remember { mutableStateOf(false) }
     // A new habit starts with the keyboard up on its name.
     val nameFocus = remember { FocusRequester() }
-    if (habit == null) LaunchedEffect(Unit) { nameFocus.requestFocus() }
+    val numberExit = remember { NumberFieldExit() }
+    // Wait for the dialog's window to take focus first; an earlier request is dropped.
+    val windowInfo = LocalWindowInfo.current
+    if (habit == null) LaunchedEffect(Unit) {
+        snapshotFlow { windowInfo.isWindowFocused }.first { it }
+        nameFocus.requestFocus()
+    }
     val locale = Locale.getDefault()
     // Weeks start on the locale's first day (Monday in China, Sunday in the US).
     val firstDay = java.time.temporal.WeekFields.of(locale).firstDayOfWeek
@@ -422,7 +475,8 @@ private fun HabitEditDialog(
                     onValueChange = { name = it.replace('\n', ' ') },
                     label = { Text(stringResource(R.string.today_habits_name)) },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth().focusRequester(nameFocus).testTag("today_habit_name"),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                    modifier = Modifier.fillMaxWidth().focusRequester(nameFocus).reopenKeyboardAfterNumber(numberExit).testTag("today_habit_name"),
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(
@@ -430,8 +484,8 @@ private fun HabitEditDialog(
                         onValueChange = { v -> target = v.filter(Char::isDigit).take(6) },
                         label = { Text(stringResource(R.string.today_habits_target)) },
                         singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        modifier = Modifier.weight(1.6f).testTag("today_habit_target"),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
+                        modifier = Modifier.weight(1.6f).leftNumberField(numberExit).testTag("today_habit_target"),
                     )
                     OutlinedTextField(
                         value = unit,
@@ -439,7 +493,8 @@ private fun HabitEditDialog(
                         label = { Text(stringResource(R.string.today_habits_unit)) },
                         singleLine = true,
                         enabled = target.isNotEmpty(),
-                        modifier = Modifier.weight(1f).testTag("today_habit_unit"),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                        modifier = Modifier.weight(1f).reopenKeyboardAfterNumber(numberExit).testTag("today_habit_unit"),
                     )
                 }
                 Text(stringResource(R.string.today_habits_days), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)

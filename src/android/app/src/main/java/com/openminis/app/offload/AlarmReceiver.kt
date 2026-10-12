@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import androidx.core.app.NotificationCompat
 import com.openminis.app.logging.AppLogger
+import com.openminis.app.notification.WeatherAlerts
 
 /**
  * BroadcastReceiver that fires when an alarm or timer triggers.
@@ -40,6 +41,9 @@ class AlarmReceiver : BroadcastReceiver() {
             } catch (t: Throwable) {
                 AppLogger.warning(TAG, "scheduled-task rescheduleAll failed: ${t.message}")
             }
+            // [T-today-weather-alerts] The hourly weather check is dropped too.
+            runCatching { WeatherAlerts.reschedule(context) }
+                .onFailure { AppLogger.warning(TAG, "weather alerts reschedule failed: ${it.message}") }
             return
         }
 

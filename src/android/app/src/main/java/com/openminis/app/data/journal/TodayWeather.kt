@@ -74,7 +74,8 @@ object TodayWeather {
         )
     }.getOrNull()
 
-    private fun round2(v: Double) = (v * 100).roundToInt() / 100.0
+    /** ~1 km: the precision any coordinate is kept at or sent with. */
+    fun round2(v: Double) = (v * 100).roundToInt() / 100.0
 
     fun emoji(code: Int): String = when (code) {
         0 -> "☀️"

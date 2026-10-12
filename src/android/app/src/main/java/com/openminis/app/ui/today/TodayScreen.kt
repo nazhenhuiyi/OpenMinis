@@ -169,6 +169,8 @@ fun TodayScreen(
     val locationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
         vm.onLocationPermissionResult(result.values.any { it })
     }
+    // Weather alerts (SPEC §16.6); a refusal just means no system notification.
+    val notificationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
 
     // ── Camera (SPEC §2.3, §5.3) ──
     val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
@@ -212,6 +214,8 @@ fun TodayScreen(
                 TodayViewModel.Event.NeedLocationPermission -> locationLauncher.launch(
                     arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION),
                 )
+                TodayViewModel.Event.NeedNotificationPermission ->
+                    if (Build.VERSION.SDK_INT >= 33) notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                 TodayViewModel.Event.AllHabitsDone -> {
                     haptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                     Toast.makeText(context, R.string.today_habits_all_done, Toast.LENGTH_SHORT).show()
@@ -255,6 +259,8 @@ fun TodayScreen(
                 onRecordLocation = vm::setRecordLocation,
                 showWeather = state.showWeather,
                 onShowWeather = vm::setShowWeather,
+                weatherAlerts = state.weatherAlerts,
+                onWeatherAlerts = vm::setWeatherAlerts,
                 onAlbums = { showAlbums = true },
                 onHabits = { showHabits = true },
                 habits = state.todayHabits,
@@ -262,6 +268,8 @@ fun TodayScreen(
                 ghostChip = state.habits.none { !it.archived },
                 onHabitsChip = { ghost -> if (ghost) showHabits = true else { sheetEditing = null; sheetOpen = true } },
             )
+            // Pinned under the header while it applies, so it is seen without scrolling (§16.5).
+            state.weatherAlert?.let { WeatherAlertBanner(it, onDismiss = vm::dismissWeatherAlert) }
             LazyColumn(
                 state = listState,
                 reverseLayout = true,
@@ -312,7 +320,7 @@ fun TodayScreen(
                     // Today: the live checklist plus read-only leftovers; past days: read-only.
                     val block = if (day.date == state.today) state.todayHabits + day.checkIns else day.checkIns
                     if (block.isNotEmpty()) item(key = "checkins:${day.date}") {
-                        CheckInBlock(block, onComplete = vm::completeHabit, onAdjust = { sheetEditing = it; sheetOpen = true })
+                        CheckInBlock(block, onAdjust = { sheetEditing = it; sheetOpen = true })
                     }
                     item(key = "day:${day.date}") { DayDivider(day.date, state.today, day.weather?.takeIf { state.showWeather }) }
                 }
@@ -450,6 +458,8 @@ private fun TodayTopBar(
     onRecordLocation: (Boolean) -> Unit,
     showWeather: Boolean,
     onShowWeather: (Boolean) -> Unit,
+    weatherAlerts: Boolean,
+    onWeatherAlerts: (Boolean) -> Unit,
     onAlbums: () -> Unit,
     onHabits: () -> Unit,
     habits: List<com.openminis.app.data.journal.HabitProgress>,
@@ -474,6 +484,11 @@ private fun TodayTopBar(
                     text = { Text(stringResource(R.string.today_settings_weather)) },
                     trailingIcon = { Switch(checked = showWeather, onCheckedChange = null) },
                     onClick = { onShowWeather(!showWeather) },
+                )
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.today_settings_weather_alerts)) },
+                    trailingIcon = { Switch(checked = weatherAlerts, onCheckedChange = null) },
+                    onClick = { onWeatherAlerts(!weatherAlerts) },
                 )
                 DropdownMenuItem(
                     text = { Text(stringResource(R.string.today_habits_menu)) },
@@ -601,6 +616,32 @@ private fun NoteRow(
         if (note.photos.isNotEmpty()) {
             Spacer(Modifier.height(10.dp))
             PhotoGrid(note.photos.map { it.second }, onClick = onOpenPhotos)
+        }
+    }
+}
+
+/** Today's live weather alert (§16.5): a soft tinted note under the header, one line per alert; × hides it. */
+@Composable
+private fun WeatherAlertBanner(text: String, onDismiss: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, bottom = 6.dp).clip(RoundedCornerShape(10.dp))
+            .background(MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.6f))
+            .testTag("today_weather_alert"),
+    ) {
+        Text(
+            text,
+            fontSize = 13.sp,
+            lineHeight = 19.sp,
+            color = MaterialTheme.colorScheme.onSecondaryContainer,
+            modifier = Modifier.weight(1f).padding(start = 12.dp, top = 8.dp, bottom = 8.dp),
+        )
+        IconButton(onClick = onDismiss, modifier = Modifier.size(36.dp).testTag("today_weather_alert_close")) {
+            Icon(
+                Icons.Filled.Close,
+                contentDescription = stringResource(R.string.common_close),
+                tint = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f),
+                modifier = Modifier.size(16.dp),
+            )
         }
     }
 }

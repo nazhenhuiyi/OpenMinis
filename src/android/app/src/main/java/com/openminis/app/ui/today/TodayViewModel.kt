@@ -5,6 +5,7 @@ import android.content.Context
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
+import androidx.core.app.NotificationManagerCompat
 import androidx.exifinterface.media.ExifInterface
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -16,6 +17,7 @@ import com.openminis.app.data.journal.JournalStore
 import com.openminis.app.data.journal.DayWeather
 import com.openminis.app.data.journal.TodayLocation
 import com.openminis.app.data.journal.TodayWeather
+import com.openminis.app.notification.WeatherAlerts
 import com.openminis.app.data.photos.CameraPhoto
 import com.openminis.app.data.photos.CameraRollRules
 import com.openminis.app.data.photos.CameraRollSource
@@ -88,6 +90,9 @@ data class TodayUiState(
     /** All habits in file order, archived ones included (§14.2). */
     val habits: List<Habit> = emptyList(),
     val showWeather: Boolean = true,
+    /** Weather alerts on (§16), and the one that applies right now, pinned under the header (§16.5). */
+    val weatherAlerts: Boolean = true,
+    val weatherAlert: String? = null,
     /** Today's check-ins (top-bar chip + sheet): habits due today, plus any already checked in today (even if deleted since). */
     val todayHabits: List<HabitProgress> = emptyList(),
 )
@@ -111,6 +116,7 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
             recordLocation = prefs.getBoolean(KEY_RECORD_LOCATION, true),
             includedAlbums = prefs.getStringSet(KEY_ALBUMS, emptySet()).orEmpty(),
             showWeather = prefs.getBoolean(KEY_SHOW_WEATHER, true),
+            weatherAlerts = WeatherAlerts.isEnabled(app),
         ),
     )
     val state: StateFlow<TodayUiState> = _state.asStateFlow()
@@ -123,6 +129,7 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
         data class Toast(val res: Int) : Event
         data object NeedLocationPermission : Event
         data object AllHabitsDone : Event
+        data object NeedNotificationPermission : Event
     }
     private val events = Channel<Event>(Channel.BUFFERED)
     val eventFlow = events.receiveAsFlow()
@@ -153,6 +160,7 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
     fun onResumed() {
         reload()
         refreshWeather()
+        WeatherAlerts.schedule(context)
     }
 
     fun loadOlder() {
@@ -231,6 +239,7 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
                 it.copy(
                     loaded = true, days = days, access = access, hasOlder = hasOlder, today = today,
                     habits = habits, todayHabits = todayHabits,
+                    weatherAlert = WeatherAlerts.active(context, openHabitNames(todayHabits)),
                 )
             }
             if (showPlaces) resolvePlaces(days)
@@ -306,7 +315,8 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
         val weather = awaitingWeather.also { awaitingWeather = false }
         if (granted) {
             note?.let { (d, id) -> locate(d, id) }
-            if (weather) refreshWeather(force = true)
+            // refreshWeather asks for notifications itself once it has a position.
+            if (weather) refreshWeather(force = true) else askNotificationsOnce()
             return
         }
         if (note != null) {
@@ -390,6 +400,7 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
             if (askLocationOnce()) awaitingWeather = true
             return
         }
+        askNotificationsOnce()
         val nowMs = store.now().toInstant().toEpochMilli()
         if (!force && nowMs - lastWeatherAttemptMs < WEATHER_RETRY_MS) return
         weatherJob = viewModelScope.launch {
@@ -398,9 +409,36 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
             if (updated != null && nowMs - updated.toInstant().toEpochMilli() < TodayWeather.REFRESH_MS) return@launch
             lastWeatherAttemptMs = nowMs
             val fix = TodayLocation.coarse(context) ?: return@launch
+            // The hourly alert check reuses this position; it never asks for background location (§16.3).
+            WeatherAlerts.saveLocation(context, fix.lat, fix.lng)
             val w = TodayWeather.fetch(fix.lat, fix.lng, store.now()) ?: return@launch
             store.setFrontMatter(today, w.frontMatter(context.getString(TodayWeather.label(w.code))))
         }
+    }
+
+    private fun openHabitNames(habits: List<HabitProgress>) = habits.filterNot { it.complete }.map { it.habit.name }
+
+    fun setWeatherAlerts(on: Boolean) {
+        WeatherAlerts.setEnabled(context, on)
+        _state.update { it.copy(weatherAlerts = on, weatherAlert = WeatherAlerts.active(context, openHabitNames(it.todayHabits))) }
+        if (on) askNotificationsOnce(force = true)
+    }
+
+    fun dismissWeatherAlert() {
+        WeatherAlerts.dismiss(context)
+        _state.update { it.copy(weatherAlert = null) }
+    }
+
+    /**
+     * Alerts are on by default but need POST_NOTIFICATIONS on Android 13+.
+     * Asked once, after the location answer so two prompts never stack (§16.6).
+     */
+    private fun askNotificationsOnce(force: Boolean = false) {
+        if (Build.VERSION.SDK_INT < 33 || !WeatherAlerts.isEnabled(context)) return
+        if (NotificationManagerCompat.from(context).areNotificationsEnabled()) return
+        if (!force && prefs.getBoolean(KEY_NOTIFY_ASKED, false)) return
+        prefs.edit().putBoolean(KEY_NOTIFY_ASKED, true).apply()
+        events.trySend(Event.NeedNotificationPermission)
     }
 
     fun setShowWeather(on: Boolean) {
@@ -550,6 +588,7 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
         private const val KEY_LOCATION_ASKED = "locationAsked"
         private const val KEY_ALBUMS = "includedAlbums"
         private const val KEY_SHOW_WEATHER = "showWeather"
+        private const val KEY_NOTIFY_ASKED = "notifyAsked"
         private const val WEATHER_RETRY_MS = 10 * 60 * 1000L
         private const val INITIAL_DAYS = 7
         private const val OLDER_STEP_DAYS = 7

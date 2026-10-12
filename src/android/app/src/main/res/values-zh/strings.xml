@@ -2199,4 +2199,16 @@
     <string name="weather_showers">阵雨</string>
     <string name="weather_thunder">雷阵雨</string>
     <string name="weather_unknown">天气</string>
+    <string name="today_settings_weather_alerts">天气提醒</string>
+    <string name="weather_alert_title">天气提醒</string>
+    <string name="weather_alert_channel">天气提醒</string>
+    <string name="weather_alert_channel_description">未来两小时内即将下雨、雷雨、大风，以及极端高温或低温</string>
+    <string name="weather_alert_storm">⛈ %1$s 左右有雷阵雨，尽量待在室内，远离树下和高处</string>
+    <string name="weather_alert_heavy">🌧 %1$s 前后有大雨或大雪，出行注意安全，能晚点出门就晚点</string>
+    <string name="weather_alert_rain">🌧 %1$s 前后可能开始下雨，出门记得带伞</string>
+    <string name="weather_alert_wind">🌬 %1$s 前后阵风较大（约 %2$d km/h），注意高空坠物，收好阳台上的东西</string>
+    <string name="weather_alert_heat">🥵 今天最高 %1$d°，注意防暑，多喝水，中午少出门</string>
+    <string name="weather_alert_cold">🥶 今天最低 %1$d°，注意保暖，路面可能结冰</string>
+    <string name="weather_alert_drop">🍂 今天比昨天降温 %1$d°，记得添衣</string>
+    <string name="weather_alert_habit">今天的「%1$s」还没完成，可以改到室内，或者趁天气变化前完成</string>
 </resources>
