@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Minis Companion · 宣传片</title>
+<!--
+  竖屏宣传片（540×960 CSS px，按 2 倍渲染成 1080×1920）。
+  形象、水彩底和动画引擎都来自 ../index.html：这里只负责分镜、字幕和手指。
+  直接看：在 companion/ 目录起一个本地服务器打开 promo/promo.html。
+  出视频：./build.sh（?render 模式下用虚拟时钟逐帧推进，并记录音效时间点）。
+-->
+<script>
+  // 渲染模式：把时间换成虚拟时钟，必须在引擎加载前装好
+  window.RENDER = location.search.includes('render');
+  if (RENDER) {
+    const V = { now: 0, timers: [], raf: [], id: 1 };
+    window.__V = V;
+    performance.now = () => V.now;
+    window.setTimeout = (fn, ms = 0, ...args) => { const id = V.id++; V.timers.push({ id, at: V.now + ms, fn, args }); return id; };
+    window.setInterval = (fn, ms, ...args) => { const id = V.id++; V.timers.push({ id, at: V.now + ms, fn, args, every: Math.max(1, ms) }); return id; };
+    window.clearTimeout = window.clearInterval = (id) => { V.timers = V.timers.filter((t) => t.id !== id); };
+    window.requestAnimationFrame = (fn) => { V.raf.push(fn); return 0; };
+    // 可复现的随机数：同一份分镜，每次渲染都一模一样
+    let seed = 20261012;
+    Math.random = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
+  }
+</script>
+<style>
+  html, body { margin: 0; background: #fff; }
+  body { width: 540px; height: 960px; overflow: hidden; display: block !important; }
+  #frame {
+    position: relative; width: 540px; height: 960px; overflow: hidden; background: #F7FAFC;
+    font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif; color: #17303F;
+  }
+  #washHost { position: absolute; inset: 0; transform-origin: 50% 30%; }
+  #washHost .wash { position: absolute; inset: 0; width: 100%; height: 100%; }
+
+  #brand { position: absolute; top: 30px; left: 28px; right: 28px; display: flex; align-items: center; gap: 8px; }
+  #brand svg { width: 34px; height: 28px; }
+  #brand b { font-size: 20px; font-weight: 800; letter-spacing: .5px; }
+  #brand span { font-size: 13px; color: #4A6070; margin-left: 8px; }
+  #brand i { margin-left: auto; font-style: normal; font-size: 14px; color: #4A6070; font-variant-numeric: tabular-nums; }
+
+  #titles { position: absolute; top: 92px; left: 28px; right: 28px; }
+  #title { margin: 0; font-size: 42px; line-height: 1.18; font-weight: 800; letter-spacing: 1px; }
+  #sub { margin: 14px 0 0; font-size: 17px; color: #3D5566; }
+
+  #charHost { position: absolute; left: 0; right: 0; top: 300px; height: 540px; display: grid; justify-items: center; }
+  #charHost #stageSvg { width: 500px; height: 500px; max-width: none; overflow: visible; margin-top: 40px; }
+  #charHost .bubble { top: 52px; font-size: 15px; max-width: 78%; text-align: center; border: 0; box-shadow: 0 8px 28px rgba(30, 80, 120, .16); }
+
+  .chips { position: absolute; left: 0; right: 0; bottom: 78px; display: flex; justify-content: center; gap: 10px; }
+  .chip {
+    padding: 9px 14px; border-radius: 999px; background: rgba(255,255,255,.78); font-size: 15px; color: #3D5566;
+    box-shadow: 0 4px 14px rgba(30, 80, 120, .08); transition: none; display: flex; align-items: center; gap: 6px;
+  }
+  .chip.on { background: var(--accent); color: #fff; transform: scale(1.08); }
+  .chip .dot { width: 12px; height: 12px; border-radius: 50%; }
+
+  #finger {
+    position: absolute; width: 46px; height: 46px; margin: -23px 0 0 -23px; border-radius: 50%;
+    background: rgba(255,255,255,.55); border: 2.5px solid rgba(255,255,255,.95);
+    box-shadow: 0 4px 16px rgba(20, 60, 90, .25); opacity: 0; pointer-events: none;
+  }
+  #ripple {
+    position: absolute; width: 46px; height: 46px; margin: -23px 0 0 -23px; border-radius: 50%;
+    border: 2.5px solid rgba(255,255,255,.9); opacity: 0; pointer-events: none;
+  }
+
+  #end { position: absolute; left: 0; right: 0; bottom: 92px; text-align: center; opacity: 0; }
+  #end .name { font-size: 64px; font-weight: 900; letter-spacing: 2px; }
+  #end .tag { font-size: 18px; color: #3D5566; margin-top: 6px; }
+  #end .small { font-size: 12px; color: #6A7F8E; margin-top: 18px; letter-spacing: 1px; }
+  #fade { position: absolute; inset: 0; background: #F7FAFC; opacity: 0; pointer-events: none; }
+
+  /* 原型页面藏在画面外：引擎还需要它的控制面板元素 */
+  #proto { position: absolute; left: -5000px; top: 0; width: 1000px; }
+</style>
+</head>
+<body class="skin-milk">
+<div id="frame">
+  <div id="washHost"></div>
+  <div id="brand">
+    <svg viewBox="24 62 192 156"><use href="#char"/></svg><b>Minis</b><span>Companion · 形象演示</span><i id="counter"></i>
+  </div>
+  <div id="titles"><h1 id="title"></h1><p id="sub"></p></div>
+  <div id="charHost"></div>
+  <div class="chips" id="toolChips"></div>
+  <div class="chips" id="skinChips"></div>
+  <div id="end">
+    <div class="name">Minis</div>
+    <div class="tag">住在你手机里的小团子</div>
+    <div class="small">MINIS COMPANION · 形象原型</div>
+  </div>
+  <div id="ripple"></div>
+  <div id="finger"></div>
+  <div id="fade"></div>
+</div>
+<div id="proto"></div>
+
+<script>
+(async () => {
+  const $ = (id) => document.getElementById(id);
+  const DURATION = 43;
+
+  // ── 1. 加载原型，把形象搬进画面，再启动它的引擎 ──
+  const html = await (await fetch('../index.html')).text();
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const style = document.createElement('style');
+  style.textContent = doc.querySelector('style').textContent;
+  document.head.insertBefore(style, document.head.querySelector('style'));
+  $('proto').innerHTML = doc.body.innerHTML.replace(/<script[\s\S]*?<\/script>/g, '');
+  $('washHost').appendChild(document.querySelector('#proto .wash'));
+  $('charHost').appendChild($('bubble'));
+  $('charHost').appendChild($('stageSvg'));
+  const engine = document.createElement('script');
+  engine.textContent = doc.querySelector('body script').textContent;
+  document.body.appendChild(engine);
+  const M = window.minis;
+  M.applySkin('milk');
+  M.sim.happyUntil = 0;
+  M.sim.waveUntil = 0;
+
+  // ── 2. 分镜 ──
+  const SCENES = [
+    { t: 0.0,  title: '嗨，我是 Minis',     sub: '住在你手机里的小团子' },
+    { t: 3.4,  title: '戳一戳',             sub: '它会开心地蹦起来' },
+    { t: 7.0,  title: '摸摸头',             sub: '耳朵抖一抖，爱心冒出来' },
+    { t: 10.6, title: '你说，它在听',        sub: '耳朵竖起来，跟着你的声音动' },
+    { t: 14.0, title: '让它想一想',          sub: '小星星转起来了' },
+    { t: 17.0, title: '帮你查，帮你做',      sub: '手里拿的，就是它正在用的工具' },
+    { t: 23.0, title: '再讲给你听',          sub: '嘴巴跟着声音一张一合' },
+    { t: 28.2, title: '搞定！',             sub: '每做完一件事，都值得庆祝' },
+    { t: 30.6, title: '陪得越久，惊喜越多',   sub: '亲密度涨了，就能换新皮肤' },
+    { t: 35.0, title: '累了就睡一会儿',       sub: '轻轻一点，它就醒啦' },
+    { t: 38.6, title: '', sub: '', end: true },
+  ];
+  const TOOLS = [[4, '🔍 搜索'], [1, '🌐 网页'], [2, '⌨️ 命令'], [3, '📄 文件']];
+  const SKINS = [['milk', '牛奶', '#7DD0F3'], ['mint', '薄荷', '#6FD9B2'], ['peach', '蜜桃', '#FFB28C'], ['night', '星夜', '#8E80E3']];
+  $('toolChips').innerHTML = TOOLS.map(([id, n]) => `<div class="chip" data-tool="${id}">${n}</div>`).join('');
+  $('skinChips').innerHTML = SKINS.map(([id, n, c]) => `<div class="chip" data-skin="${id}"><span class="dot" style="background:${c}"></span>${n}</div>`).join('');
+
+  // 音效时间点：渲染脚本读出去合成声音
+  const cues = window.__cues = [];
+  const cue = (type, extra = {}) => cues.push({ t: +now.toFixed(3), type, ...extra });
+
+  // 手指：轻点 / 抚摸，坐标用角色的 SVG 坐标（240×240）
+  const svgPt = (x, y) => {
+    const r = $('stageSvg').getBoundingClientRect();
+    return [r.left + (x / 240) * r.width, r.top + (y / 240) * r.height];
+  };
+  const TAPS = [[3.9, 146, 112], [4.7, 100, 122], [5.5, 150, 138], [37.4, 122, 120]];
+  const PET = { from: 7.3, to: 9.9 };
+
+  // 按时间触发的动作（每个只触发一次）
+  const tool = (id) => () => { M.setState('working', { tool: id }); cue('tool', { tool: id }); };
+  const skin = (id, i) => () => { M.applySkin(id); M.burstStars(10); M.hop(150); cue('skin', { i }); };
+  const ACTIONS = [
+    [0.6,  () => { M.sim.hopY = -660; M.sim.hopV = 0; cue('drop'); }],
+    ...TAPS.map(([t]) => [t, () => { const sleeping = M.inputs.state === 7; M.tap(); cue(sleeping ? 'wake' : 'tap'); }]),
+    ...Array.from({ length: 11 }, (_, i) => [PET.from + 0.15 + i * 0.22, () => { M.pet(performance.now()); cue('pet', { i }); }]),
+    [10.6, () => { M.setState('listening'); cue('listen'); }],
+    [14.0, () => { M.setState('thinking'); cue('think'); }],
+    [17.0, tool(4)], [18.5, tool(1)], [20.0, tool(2)], [21.5, tool(3)],
+    [23.0, () => { M.setState('speaking', { caption: '查好啦：明天杭州多云，18–24°C，下午可能有阵雨，记得带伞 ☂️' }); cue('speak', { simT: M.sim.t }); }],
+    [28.2, () => { M.setState('done'); cue('done'); }],
+    [31.0, skin('mint', 1)], [32.0, skin('peach', 2)], [33.0, skin('night', 3)], [34.0, skin('milk', 0)],
+    [35.0, () => { M.setState('sleeping'); cue('sleep'); }],
+    [38.9, () => { M.sim.waveUntil = performance.now() + 3200; M.sim.happyUntil = performance.now() + 3200; M.hop(200); cue('end'); }],
+  ].sort((a, b) => a[0] - b[0]);
+  let next = 0, now = 0, sceneIdx = -1, wasAir = false, peak = 0;
+
+  const clamp = (v, a = 0, b = 1) => Math.max(a, Math.min(b, v));
+  const smooth = (a, b, v) => { const x = clamp((v - a) / (b - a)); return x * x * (3 - 2 * x); };
+
+  function update(t) {
+    now = t;
+    while (next < ACTIONS.length && ACTIONS[next][0] <= t) ACTIONS[next++][1]();
+
+    // 落地检测：所有跳跃落地都配一个“啵嘤”，力度看跳了多高
+    const air = M.sim.hopY < 0;
+    if (air) peak = Math.min(peak, M.sim.hopY);
+    if (wasAir && !air) { cue('land', { h: Math.round(-peak) }); peak = 0; }
+    wasAir = air;
+    // 从天上掉下来的时候先藏起影子
+    $('shadow').style.opacity = clamp(1 + M.sim.hopY / 160);
+
+    // 水彩晕开
+    const bloom = smooth(0, 1.4, t);
+    $('washHost').style.opacity = bloom;
+    $('washHost').style.transform = `scale(${(1.25 - 0.25 * bloom).toFixed(4)})`;
+
+    // 字幕
+    let si = 0;
+    SCENES.forEach((s, i) => { if (t >= s.t) si = i; });
+    const sc = SCENES[si], nextT = SCENES[si + 1]?.t ?? DURATION;
+    if (si !== sceneIdx) { sceneIdx = si; $('title').textContent = sc.title; $('sub').textContent = sc.sub; }
+    const local = t - sc.t;
+    const show = smooth(0.05, 0.45, local) * (1 - smooth(nextT - sc.t - 0.3, nextT - sc.t, local));
+    $('titles').style.opacity = sc.end ? 0 : show;
+    $('titles').style.transform = `translateY(${((1 - smooth(0.05, 0.5, local)) * 14).toFixed(2)}px)`;
+    $('counter').textContent = sc.end ? '' : `${String(si + 1).padStart(2, '0')} / ${String(SCENES.length - 1).padStart(2, '0')}`;
+
+    // 工具 / 皮肤 小标签
+    const toolsOn = t >= 16.9 && t < 23.0, skinsOn = t >= 30.7 && t < 35.0;
+    $('toolChips').style.opacity = smooth(16.9, 17.2, t) * (1 - smooth(22.7, 23.0, t));
+    $('skinChips').style.opacity = smooth(30.7, 31.0, t) * (1 - smooth(34.7, 35.0, t));
+    document.querySelectorAll('#toolChips .chip').forEach((c) => c.classList.toggle('on', toolsOn && Number(c.dataset.tool) === M.inputs.tool));
+    const curSkin = [...document.body.classList].find((c) => c.startsWith('skin-'))?.slice(5);
+    document.querySelectorAll('#skinChips .chip').forEach((c) => c.classList.toggle('on', skinsOn && t >= 31 && c.dataset.skin === curSkin));
+
+    // 手指
+    let fx = null, fy = null, fo = 0, press = 0, ripple = null;
+    for (const [tt, x, y] of TAPS) {
+      if (t > tt - 0.45 && t < tt + 0.45) {
+        [fx, fy] = svgPt(x, y);
+        fy += (1 - smooth(tt - 0.45, tt - 0.05, t)) * 30;
+        fo = smooth(tt - 0.45, tt - 0.2, t) * (1 - smooth(tt + 0.2, tt + 0.45, t));
+        press = 1 - Math.abs(t - tt) / 0.12;
+      }
+      if (t >= tt && t < tt + 0.55) ripple = { at: svgPt(x, y), k: (t - tt) / 0.55 };
+    }
+    if (t > PET.from - 0.3 && t < PET.to + 0.3) {
+      const k = clamp((t - PET.from) / (PET.to - PET.from));
+      [fx, fy] = svgPt(120 + Math.sin(k * Math.PI * 4) * 34, 96 + Math.cos(k * Math.PI * 8) * 4);
+      fo = smooth(PET.from - 0.3, PET.from, t) * (1 - smooth(PET.to, PET.to + 0.3, t));
+      press = 0.5;
+    }
+    const finger = $('finger');
+    finger.style.opacity = fo.toFixed(3);
+    if (fx != null) finger.style.transform = `translate(${fx.toFixed(1)}px, ${fy.toFixed(1)}px) scale(${(1 - clamp(press) * 0.18).toFixed(3)})`;
+    const rp = $('ripple');
+    if (ripple) {
+      rp.style.opacity = (1 - ripple.k).toFixed(3);
+      rp.style.transform = `translate(${ripple.at[0].toFixed(1)}px, ${ripple.at[1].toFixed(1)}px) scale(${(1 + ripple.k * 1.8).toFixed(3)})`;
+    } else rp.style.opacity = 0;
+
+    // 眼睛跟着手指看
+    const r = $('stageSvg').getBoundingClientRect();
+    if (fo > 0.1 && fx != null) {
+      M.pointer.x = clamp((fx - (r.left + r.width / 2)) / 160, -1, 1);
+      M.pointer.y = clamp((fy - (r.top + r.height * 0.58)) / 160, -1, 1);
+    } else { M.pointer.x *= 0.9; M.pointer.y *= 0.9; }
+
+    // 片尾：团子往上让一让，给名字留位置
+    $('charHost').style.transform = `translateY(${(-smooth(38.5, 39.3, t) * 150).toFixed(2)}px)`;
+    $('end').style.opacity = smooth(38.7, 39.3, t);
+    $('end').style.transform = `translateY(${((1 - smooth(38.7, 39.4, t)) * 18).toFixed(2)}px)`;
+    $('fade').style.opacity = smooth(DURATION - 0.6, DURATION, t);
+  }
+
+  // ── 3. 驱动 ──
+  if (RENDER) {
+    const V = window.__V;
+    const starts = new WeakMap();
+    // CSS 动画 / 过渡也跟着虚拟时钟走
+    const syncCss = () => {
+      for (const a of document.getAnimations()) {
+        if (!starts.has(a)) starts.set(a, V.now - (a.currentTime || 0));
+        a.pause();
+        a.currentTime = V.now - starts.get(a);
+      }
+    };
+    window.__step = (ms) => {
+      const target = V.now + ms;
+      for (;;) {
+        const due = V.timers.filter((x) => x.at <= target).sort((a, b) => a.at - b.at)[0];
+        if (!due) break;
+        V.now = due.at;
+        if (due.every) due.at += due.every; else V.timers = V.timers.filter((x) => x !== due);
+        due.fn(...(due.args || []));
+      }
+      V.now = target;
+      const cbs = V.raf; V.raf = [];
+      cbs.forEach((f) => f(V.now));
+      update(V.now / 1000);
+      syncCss();
+    };
+    window.__duration = DURATION;
+    window.__ready = true;
+  } else {
+    const t0 = performance.now();
+    const loop = (ts) => {
+      update(Math.min(DURATION, (ts - t0) / 1000));
+      requestAnimationFrame(loop);
+    };
+    requestAnimationFrame(loop);
+  }
+})();
+</script>
+</body>
+</html>

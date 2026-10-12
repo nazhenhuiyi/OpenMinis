@@ -1,0 +1,960 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Minis Companion · 形象原型</title>
+<style>
+  :root {
+    --bg: #F6F5FB; --panel: #FFFFFF; --text: #1E1B2E; --sub: #6B6785; --border: #E6E3F2;
+    --line: rgba(35, 29, 58, .14);
+  }
+  body.dark { --bg: #121220; --panel: #1C1C2E; --text: #F1EFFA; --sub: #A19DBA; --border: #2C2B44; }
+
+  /* 皮肤：只改变量，SVG 里所有颜色都引用它们 —— 对应 Rive 里的 skin 输入
+     软胶质感：--hi 高光 → --body-top 本色 → --body-bot 背光面（带一点环境色），--shade 是底部的环境光遮蔽；
+     --wash1 / --wash2 是舞台的水彩底色 */
+  body.skin-milk  { --hi:#FFFFFF; --body-top:#F8FAFC; --body-bot:#CFD9E3; --shade:#5F7A92; --accent:#2B98D6; --accent2:#9ED5F1; --cheek:#FFB0BF; --ink:#22262D; --wash1:#1D8FDF; --wash2:#7DD0F3; }
+  body.skin-mint  { --hi:#FFFFFF; --body-top:#F5FCF8; --body-bot:#C5E6D7; --shade:#4F8574; --accent:#1FA57A; --accent2:#A3E6CC; --cheek:#FFB0B8; --ink:#1F2B27; --wash1:#2FBF8F; --wash2:#A6EBD2; }
+  body.skin-peach { --hi:#FFFFFF; --body-top:#FFF8F3; --body-bot:#F1D3C3; --shade:#946A5A; --accent:#EF7B4F; --accent2:#FFD0B5; --cheek:#FF9EAE; --ink:#2E2420; --wash1:#FF9466; --wash2:#FFD5BC; }
+  body.skin-night { --hi:#FFFFFF; --body-top:#EDEFFF; --body-bot:#A9B0E6; --shade:#3F4386; --accent:#F4B63B; --accent2:#FFE3A6; --cheek:#FF9CC0; --ink:#1A1C38; --wash1:#3A3EA8; --wash2:#8E80E3; }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", sans-serif;
+    background: var(--bg); color: var(--text); transition: background .3s, color .3s;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 24px; display: grid; grid-template-columns: 1fr 360px; gap: 24px; }
+  @media (max-width: 860px) { .wrap { grid-template-columns: 1fr; } }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .hint { color: var(--sub); font-size: 12px; margin: 0 0 16px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 16px; }
+
+  /* ── 舞台 ───────────────────────────── */
+  .stage { position: relative; display: grid; place-items: center; min-height: 460px; overflow: hidden; background: #F7FAFC; }
+  body.dark .stage { background: #10141D; }
+  .wash { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; transition: opacity .3s; }
+  body.dark .wash { opacity: .55; }
+  #stageSvg { position: relative; width: 380px; height: 380px; max-width: 100%; touch-action: none; user-select: none; }
+  #char { cursor: grab; }
+  #char:active { cursor: grabbing; }
+  .bubble {
+    position: absolute; top: 18px; left: 50%; transform: translateX(-50%) translateY(6px);
+    max-width: 80%; padding: 10px 14px; border-radius: 16px; background: var(--panel);
+    border: 1px solid var(--border); box-shadow: 0 6px 20px rgba(0,0,0,.08);
+    opacity: 0; transition: opacity .25s, transform .25s; pointer-events: none; min-height: 1.5em;
+  }
+  .bubble.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .stateTag { position: absolute; bottom: 14px; left: 16px; font-size: 12px; color: var(--sub); }
+  .toast {
+    position: absolute; bottom: 14px; right: 16px; background: var(--accent); color: #fff;
+    padding: 6px 12px; border-radius: 999px; font-size: 12px; opacity: 0; transition: opacity .3s;
+  }
+  .toast.show { opacity: 1; }
+
+  /* 眼睛形态切换（data-eyes），对应 Rive 里不同的 eye 图层 */
+  .eyes { display: none; }
+  #stageSvg[data-eyes="open"]   .eyes-open,
+  #stageSvg[data-eyes="happy"]  .eyes-happy,
+  #stageSvg[data-eyes="closed"] .eyes-closed,
+  #stageSvg[data-eyes="x"]      .eyes-x { display: inline; }
+
+  /* 眉毛（data-brow） */
+  .brow { opacity: 0; transition: opacity .25s, transform .25s; transform-box: fill-box; transform-origin: center; }
+  #stageSvg[data-brow="focus"]   #browL { opacity: 1; transform: rotate(14deg); }
+  #stageSvg[data-brow="focus"]   #browR { opacity: 1; transform: rotate(-14deg); }
+  #stageSvg[data-brow="worried"] #browL { opacity: 1; transform: rotate(-14deg); }
+  #stageSvg[data-brow="worried"] #browR { opacity: 1; transform: rotate(14deg); }
+  #stageSvg[data-brow="think"]   #browL { opacity: 1; transform: translateY(1px); }
+  #stageSvg[data-brow="think"]   #browR { opacity: 1; transform: translateY(-4px) rotate(-10deg); }
+  #stageSvg[data-brow="up"]      .brow  { opacity: 1; transform: translateY(-4px); }
+
+  /* 状态附带的特效（data-state） */
+  .fx { opacity: 0; transition: opacity .3s; }
+  #stageSvg[data-state="thinking"] #thought,
+  #stageSvg[data-state="sleeping"] #zzz,
+  #stageSvg[data-state="error"]    #question,
+  #stageSvg[data-state="listening"] #waves { opacity: 1; }
+  #thought circle { animation: dot 1.2s infinite ease-in-out; }
+  #thought circle:nth-child(2) { animation-delay: .2s; }
+  #thought circle:nth-child(3) { animation-delay: .4s; }
+  @keyframes dot { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
+  #zzz text { animation: zz 2.4s infinite ease-in-out; }
+  #zzz text:nth-child(2) { animation-delay: .8s; }
+  @keyframes zz { 0% { opacity: 0; transform: translate(0, 0); } 40% { opacity: 1; } 100% { opacity: 0; transform: translate(10px, -18px); } }
+  .prop { opacity: 0; transition: opacity .25s; }
+  #termCursor { animation: blinkC 1s steps(1) infinite; }
+  @keyframes blinkC { 50% { opacity: 0; } }
+
+  /* ── 控制面板 ───────────────────────────── */
+  .group { margin-bottom: 16px; }
+  .group h3 { font-size: 12px; color: var(--sub); font-weight: 600; margin: 0 0 8px; letter-spacing: .02em; }
+  .btns { display: flex; flex-wrap: wrap; gap: 6px; }
+  button {
+    font: inherit; font-size: 13px; padding: 6px 10px; border-radius: 10px; cursor: pointer;
+    border: 1px solid var(--border); background: var(--bg); color: var(--text);
+  }
+  button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  .bar { height: 8px; border-radius: 99px; background: var(--border); overflow: hidden; }
+  .bar > div { height: 100%; width: 0; background: linear-gradient(90deg, var(--cheek), var(--accent)); transition: width .3s; }
+  .affRow { display: flex; justify-content: space-between; font-size: 12px; color: var(--sub); margin-bottom: 6px; }
+  pre { margin: 0; font: 12px/1.6 ui-monospace, Menlo, monospace; background: var(--bg); border-radius: 10px; padding: 10px; white-space: pre-wrap; }
+  .sizes { display: flex; align-items: flex-end; gap: 18px; }
+  .sizes figure { margin: 0; text-align: center; font-size: 11px; color: var(--sub); }
+  .sizes svg { display: block; margin: 0 auto 4px; background: color-mix(in srgb, var(--wash2) 35%, transparent); border-radius: 6px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  td, th { text-align: left; padding: 5px 4px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--sub); font-weight: 600; }
+  code { font: 12px ui-monospace, Menlo, monospace; }
+  .full { grid-column: 1 / -1; }
+</style>
+</head>
+<body class="skin-milk">
+<div class="wrap">
+  <div>
+    <h1>Minis Companion · 形象原型</h1>
+    <p class="hint">软胶团子风格：没有描边，靠光影塑形。点一下 = 戳；按住拖动 = 摸摸头；25 秒不理它会睡着。键盘 1–8 切状态，T 切换工具。</p>
+
+    <div class="card stage" id="stage">
+      <!-- 水彩底：几团颜色经过湍流位移 + 模糊，像纸上晕开的颜料 -->
+      <svg class="wash" viewBox="0 0 400 300" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+        <defs>
+          <filter id="watercolor" x="-30%" y="-30%" width="160%" height="160%">
+            <feTurbulence type="fractalNoise" baseFrequency=".018" numOctaves="4" seed="11" result="noise"/>
+            <feDisplacementMap in="SourceGraphic" in2="noise" scale="48" xChannelSelector="R" yChannelSelector="G" result="bleed"/>
+            <feGaussianBlur in="bleed" stdDeviation="7" result="soft"/>
+            <!-- 纸纹：极轻的颗粒，只吃掉一点点颜料 -->
+            <feTurbulence type="fractalNoise" baseFrequency=".6" numOctaves="2" seed="3" result="grain"/>
+            <feColorMatrix in="grain" type="matrix" values="0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 -.25 1.08" result="paper"/>
+            <feComposite in="soft" in2="paper" operator="in"/>
+          </filter>
+        </defs>
+        <g filter="url(#watercolor)">
+          <ellipse cx="150" cy="40"  rx="150" ry="85" style="fill: var(--wash1)" opacity=".55"/>
+          <ellipse cx="250" cy="95"  rx="105" ry="70" style="fill: var(--wash1)" opacity=".45"/>
+          <ellipse cx="120" cy="120" rx="90"  ry="55" style="fill: var(--wash2)" opacity=".6"/>
+          <ellipse cx="330" cy="40"  rx="70"  ry="50" style="fill: var(--wash2)" opacity=".5"/>
+          <ellipse cx="300" cy="200" rx="90"  ry="50" style="fill: var(--wash2)" opacity=".35"/>
+          <ellipse cx="60"  cy="60"  rx="60"  ry="40" style="fill: var(--wash1)" opacity=".35"/>
+          <ellipse cx="210" cy="150" rx="60"  ry="35" style="fill: var(--wash2)" opacity=".4"/>
+        </g>
+      </svg>
+
+      <div class="bubble" id="bubble"></div>
+
+      <svg id="stageSvg" viewBox="0 0 240 240" data-eyes="open" data-brow="none" data-state="idle" aria-label="Minis 形象">
+        <defs>
+          <!-- 软胶质感：光从左上来，高光 → 本色 → 背光面 -->
+          <radialGradient id="gBody" cx=".36" cy=".26" r=".85">
+            <stop offset="0"   style="stop-color: var(--hi)"/>
+            <stop offset=".42" style="stop-color: var(--body-top)"/>
+            <stop offset="1"   style="stop-color: var(--body-bot)"/>
+          </radialGradient>
+          <!-- 环境光遮蔽：右下方贴地的地方更暗 -->
+          <radialGradient id="gShade" cx=".64" cy=".95" r=".75">
+            <stop offset="0"   style="stop-color: var(--shade); stop-opacity: .38"/>
+            <stop offset="1"   style="stop-color: var(--shade); stop-opacity: 0"/>
+          </radialGradient>
+          <radialGradient id="gEye" cx=".4" cy=".35" r=".7">
+            <stop offset="0" style="stop-color: var(--ink); stop-opacity: .75"/>
+            <stop offset="1" style="stop-color: var(--ink)"/>
+          </radialGradient>
+          <radialGradient id="gGlow">
+            <stop offset="0" style="stop-color: var(--accent); stop-opacity: .6"/>
+            <stop offset="1" style="stop-color: var(--accent); stop-opacity: 0"/>
+          </radialGradient>
+          <filter id="blurHi" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="5"/></filter>
+          <filter id="blurSoft" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="2.6"/></filter>
+          <filter id="blurGround" x="-50%" y="-100%" width="200%" height="300%"><feGaussianBlur stdDeviation="4"/></filter>
+
+          <!-- 身体轮廓：上圆下宽的麻薯，底部微微压扁 -->
+          <path id="bodyShape" d="M120 66 C171 66 203 104 205 150 C207 189 187 208 120 208 C53 208 33 189 35 150 C37 104 69 66 120 66 Z"/>
+          <clipPath id="bodyClip"><use href="#bodyShape"/></clipPath>
+        </defs>
+
+        <!-- 地面阴影：柔和的一团，随弹跳缩放 -->
+        <ellipse id="shadow" cx="120" cy="211" rx="62" ry="7" fill="var(--shade)" opacity=".28" filter="url(#blurGround)"/>
+
+        <!-- 整个角色：呼吸 / 弹跳 / 歪头 都作用在这一层 -->
+        <g id="char">
+          <!-- 耳朵：头顶两颗小圆，一半埋进身体里（绕耳根旋转：竖起 / 耷拉 / 抖动） -->
+          <g id="earL">
+            <circle cx="78" cy="83" r="17.5" fill="url(#gBody)"/>
+            <circle cx="78" cy="83" r="17.5" fill="url(#gShade)"/>
+          </g>
+          <g id="earR">
+            <circle cx="162" cy="83" r="17.5" fill="url(#gBody)"/>
+            <circle cx="162" cy="83" r="17.5" fill="url(#gShade)"/>
+          </g>
+
+          <!-- 左手：贴在身侧的小圆揪 -->
+          <g id="armL">
+            <ellipse cx="38" cy="172" rx="11" ry="14" fill="url(#gBody)"/>
+            <ellipse cx="38" cy="172" rx="11" ry="14" fill="url(#gShade)"/>
+          </g>
+
+          <!-- 身体：没有描边，全靠光影塑形 -->
+          <use href="#bodyShape" fill="url(#gBody)"/>
+          <g clip-path="url(#bodyClip)">
+            <use href="#bodyShape" fill="url(#gShade)"/>
+            <!-- 底部的反光：地面把一点光反射回来 -->
+            <ellipse cx="120" cy="214" rx="70" ry="14" fill="#fff" opacity=".35" filter="url(#blurSoft)"/>
+            <!-- 边缘的一圈柔光，让轮廓显得软 -->
+            <use href="#bodyShape" fill="none" stroke="#fff" stroke-width="5" opacity=".35" filter="url(#blurSoft)"/>
+          </g>
+          <!-- 左上方的大块柔和高光 -->
+          <ellipse cx="88" cy="98" rx="27" ry="13" fill="#fff" opacity=".85" transform="rotate(-30 88 98)" filter="url(#blurHi)"/>
+
+          <!-- 品牌小星星：干活、思考、完成时在头顶左边冒出来 -->
+          <g id="star" transform="translate(56 58) scale(0)">
+            <circle id="starGlow" r="15" fill="url(#gGlow)" opacity="0"/>
+            <path id="starShape" d="M0 -9 C1.4 -2.5 2.5 -1.4 9 0 C2.5 1.4 1.4 2.5 0 9 C-1.4 2.5 -2.5 1.4 -9 0 C-2.5 -1.4 -1.4 -2.5 0 -9 Z" fill="var(--accent)"/>
+          </g>
+
+          <!-- 脸：整体随视线平移 -->
+          <g id="face">
+            <!-- 睁眼：一对小黑豆，竖椭圆，间距宽，带一点光泽 -->
+            <g class="eyes eyes-open">
+              <g id="eyeL">
+                <ellipse cx="92" cy="150" rx="7" ry="9.5" fill="url(#gEye)"/>
+                <ellipse cx="89.8" cy="145.6" rx="2.4" ry="2.8" fill="#fff" opacity=".9"/>
+                <circle cx="94.6" cy="155" r="1" fill="#fff" opacity=".5"/>
+              </g>
+              <g id="eyeR">
+                <ellipse cx="148" cy="150" rx="7" ry="9.5" fill="url(#gEye)"/>
+                <ellipse cx="145.8" cy="145.6" rx="2.4" ry="2.8" fill="#fff" opacity=".9"/>
+                <circle cx="150.6" cy="155" r="1" fill="#fff" opacity=".5"/>
+              </g>
+            </g>
+            <!-- 开心 ^ ^ -->
+            <g class="eyes eyes-happy" fill="none" stroke="var(--ink)" stroke-width="3.6" stroke-linecap="round">
+              <path d="M85 153 Q92 143 99 153"/><path d="M141 153 Q148 143 155 153"/>
+            </g>
+            <!-- 闭眼（睡觉） -->
+            <g class="eyes eyes-closed" fill="none" stroke="var(--ink)" stroke-width="3.2" stroke-linecap="round">
+              <path d="M85 150 Q92 156 99 150"/><path d="M141 150 Q148 156 155 150"/>
+            </g>
+            <!-- > < （出错） -->
+            <g class="eyes eyes-x" fill="none" stroke="var(--ink)" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M87 144 L97 150 L87 156"/><path d="M153 144 L143 150 L153 156"/>
+            </g>
+
+            <!-- 眉毛：短小 -->
+            <line id="browL" class="brow" x1="86" y1="134" x2="98" y2="134" stroke="var(--ink)" stroke-width="2.4" stroke-linecap="round"/>
+            <line id="browR" class="brow" x1="142" y1="134" x2="154" y2="134" stroke="var(--ink)" stroke-width="2.4" stroke-linecap="round"/>
+
+            <!-- 腮红：晕开的一小团，不画线 -->
+            <g id="cheeks" filter="url(#blurSoft)">
+              <ellipse cx="74" cy="165" rx="10" ry="6" fill="var(--cheek)"/>
+              <ellipse cx="166" cy="165" rx="10" ry="6" fill="var(--cheek)"/>
+            </g>
+
+            <!-- 嘴：一条细细的笑线 / 张嘴 + 小舌头，由 JS 按 mood + volume 生成 -->
+            <clipPath id="mouthClip"><path id="mouthClipPath" d=""/></clipPath>
+            <path id="mouthLine" d="" fill="none" stroke="var(--ink)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+            <path id="mouthFill" d="" fill="var(--ink)"/>
+            <ellipse id="tongue" cx="120" cy="172" rx="4.5" ry="3" fill="#FF8DA6" clip-path="url(#mouthClip)" opacity="0"/>
+          </g>
+
+          <!-- 右手（干活时举起道具） -->
+          <g id="armR">
+            <ellipse cx="202" cy="172" rx="11" ry="14" fill="url(#gBody)"/>
+            <ellipse cx="202" cy="172" rx="11" ry="14" fill="url(#gShade)"/>
+          </g>
+
+          <!-- 道具：对应 Agent 当前调用的工具（tool 输入） -->
+          <g id="prop" transform="translate(212 150)">
+            <g class="prop" data-tool="1"><!-- 浏览器 -->
+              <circle r="13" fill="#fff" stroke="var(--accent)" stroke-width="2.5"/>
+              <ellipse rx="5.5" ry="13" fill="none" stroke="var(--accent)" stroke-width="2"/>
+              <line x1="-13" y1="0" x2="13" y2="0" stroke="var(--accent)" stroke-width="2"/>
+            </g>
+            <g class="prop" data-tool="2"><!-- 终端 -->
+              <rect x="-16" y="-12" width="32" height="24" rx="5" fill="#1E1B2E"/>
+              <path d="M-10 -4 L-5 0 L-10 4" fill="none" stroke="#7CFFB2" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+              <rect id="termCursor" x="-2" y="2" width="8" height="2.5" fill="#7CFFB2"/>
+            </g>
+            <g class="prop" data-tool="3"><!-- 文件 -->
+              <path d="M-11 -14 H5 L11 -8 V14 H-11 Z" fill="#fff" stroke="var(--accent)" stroke-width="2.2" stroke-linejoin="round"/>
+              <line x1="-6" y1="-3" x2="6" y2="-3" stroke="var(--accent2)" stroke-width="2"/>
+              <line x1="-6" y1="3"  x2="6" y2="3"  stroke="var(--accent2)" stroke-width="2"/>
+              <line x1="-6" y1="9"  x2="2" y2="9"  stroke="var(--accent2)" stroke-width="2"/>
+            </g>
+            <g class="prop" data-tool="4"><!-- 搜索 -->
+              <circle cx="-3" cy="-3" r="9" fill="#fff" stroke="var(--accent)" stroke-width="3"/>
+              <line x1="4" y1="4" x2="12" y2="12" stroke="var(--accent)" stroke-width="4" stroke-linecap="round"/>
+            </g>
+          </g>
+        </g>
+
+        <!-- 状态特效 -->
+        <g id="thought" class="fx" fill="var(--accent)">
+          <circle cx="190" cy="78" r="3.5"/><circle cx="203" cy="63" r="5"/><circle cx="218" cy="45" r="6.5"/>
+        </g>
+        <g id="zzz" class="fx" fill="var(--accent)" font-weight="700" font-family="-apple-system, sans-serif">
+          <text x="184" y="78" font-size="16">z</text><text x="196" y="62" font-size="22">Z</text>
+        </g>
+        <text id="question" class="fx" x="188" y="82" font-size="30" font-weight="800" fill="var(--accent)" font-family="-apple-system, sans-serif">?</text>
+        <g id="waves" class="fx" fill="none" stroke="var(--accent)" stroke-width="3" stroke-linecap="round">
+          <path id="waveL1" d="M22 140 Q14 158 22 176"/><path id="waveL2" d="M12 132 Q0 158 12 184"/>
+          <path id="waveR1" d="M218 140 Q226 158 218 176"/><path id="waveR2" d="M228 132 Q240 158 228 184"/>
+        </g>
+
+        <!-- 粒子（爱心 / 星星） -->
+        <g id="particles"></g>
+      </svg>
+
+      <div class="stateTag" id="stateTag">idle</div>
+      <div class="toast" id="toast"></div>
+    </div>
+  </div>
+
+  <div>
+    <div class="card">
+      <div class="group">
+        <h3>一键演示</h3>
+        <div class="btns">
+          <button class="primary" id="demoBtn">▶ 模拟一次 Agent 任务</button>
+          <button id="micBtn">🎙 用麦克风驱动嘴型</button>
+        </div>
+      </div>
+
+      <div class="group">
+        <h3>状态 · Rive 输入 <code>state</code></h3>
+        <div class="btns" id="stateBtns"></div>
+      </div>
+
+      <div class="group">
+        <h3>工具道具 · Rive 输入 <code>tool</code>（working 时显示）</h3>
+        <div class="btns" id="toolBtns"></div>
+      </div>
+
+      <div class="group">
+        <h3>亲密度 · 戳它、摸它会涨（模仿 Grok 的 affection）</h3>
+        <div class="affRow"><span id="affLv">Lv0</span><span id="affNum">0 / 10</span></div>
+        <div class="bar"><div id="affBar"></div></div>
+      </div>
+
+      <div class="group">
+        <h3>皮肤 · 随亲密度解锁</h3>
+        <div class="btns" id="skinBtns"></div>
+      </div>
+
+      <div class="group">
+        <h3>外观</h3>
+        <div class="btns">
+          <button id="darkBtn">🌙 深色背景</button>
+          <button id="resetBtn">重置亲密度</button>
+        </div>
+      </div>
+
+      <div class="group">
+        <h3>小尺寸辨识度（实时同步）</h3>
+        <div class="sizes">
+          <figure><svg viewBox="24 62 192 156" width="18" height="16"><use href="#char"/></svg>16</figure>
+          <figure><svg viewBox="24 62 192 156" width="31" height="28"><use href="#char"/></svg>28</figure>
+          <figure><svg viewBox="24 62 192 156" width="70" height="64"><use href="#char"/></svg>64</figure>
+        </div>
+      </div>
+
+      <div class="group" style="margin-bottom:0">
+        <h3>当前 Rive 状态机输入</h3>
+        <pre id="inputsView"></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="card full">
+    <div class="group" style="margin-bottom:0">
+      <h3>接入 App 时的事件映射（iOS / Android 共用）</h3>
+      <table>
+        <tr><th>App 事件</th><th>Rive 输入</th><th>形象表现</th></tr>
+        <tr><td>无任务</td><td><code>state=0 idle</code></td><td>呼吸、眨眼、眼睛跟随手指；25 秒无交互 → 睡觉</td></tr>
+        <tr><td>语音输入中</td><td><code>state=1 listening</code> + <code>volume</code></td><td>耳朵竖起、身体前倾、两侧声波随音量变化</td></tr>
+        <tr><td>已发送、等待模型</td><td><code>state=2 thinking</code></td><td>眼睛往上看、天线星星旋转发光、思考泡泡</td></tr>
+        <tr><td>调用工具（<code>toolIcon</code>）</td><td><code>state=3 working</code> + <code>tool</code></td><td>举起对应道具：地球 / 终端 / 文件 / 放大镜，专注眉</td></tr>
+        <tr><td>TTS 朗读中（<code>isAudioPlaying</code>）</td><td><code>state=4 speaking</code> + <code>talking</code> + <code>volume</code></td><td>嘴型跟随音量开合，气泡显示字幕</td></tr>
+        <tr><td>任务完成（<code>allCompleted</code>）</td><td><code>state=5 done</code></td><td>跳起、举双手、撒星星，约 2.6 秒后自动回到 idle</td></tr>
+        <tr><td>请求出错</td><td><code>state=6 error</code></td><td>&gt; &lt; 眼、担心眉、摇头、问号</td></tr>
+        <tr><td>长时间空闲</td><td><code>state=7 sleeping</code></td><td>闭眼、耳朵耷拉、慢呼吸、Zz；点一下会惊醒</td></tr>
+        <tr><td>用户点击 / 抚摸</td><td><code>tap</code> / <code>pet</code>（Trigger）</td><td>惊讶后开心、冒爱心、耳朵抖动，亲密度增加</td></tr>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const svg = $('stageSvg');
+  const NS = 'http://www.w3.org/2000/svg';
+  const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  const STATES = ['idle', 'listening', 'thinking', 'working', 'speaking', 'done', 'error', 'sleeping'];
+  const STATE_LABEL = ['待机', '聆听', '思考', '干活', '说话', '完成', '出错', '睡觉'];
+  const TOOLS = ['无', '浏览器', '终端', '文件', '搜索'];
+  const SKINS = [
+    { id: 'milk',     name: '牛奶',   lv: 0 },
+    { id: 'mint',     name: '薄荷',   lv: 1 },
+    { id: 'peach',    name: '蜜桃',   lv: 2 },
+    { id: 'night',    name: '星夜',   lv: 3 },
+  ];
+  const LEVELS = [0, 10, 30, 60];
+
+  // ── Rive 状态机输入（代码只改这些，表现全部由下面的“状态机”推导） ──
+  const inputs = { state: 0, tool: 1, talking: false, volume: 0 };
+
+  // ── 内部动画状态 ──
+  const sim = {
+    t: 0, lookX: 0, lookY: 0, mouth: 0, curve: 6,
+    blinkPhase: -1, nextBlink: 2,
+    hopY: 0, hopV: 0, squash: 0, shakeT: 0,
+    earL: 0, earR: 0, armL: 0, armR: 0, tilt: 0, lean: 0,
+    happyUntil: 0, surpriseUntil: 0, petUntil: 0, squeezeUntil: 0, waveUntil: 0,
+    tail: 0, twitchL: 0, twitchR: 0, nextTwitch: 4, nextTwinkle: 2,
+    lastInteract: performance.now(),
+  };
+  const pointer = { x: 0, y: 0 };
+  let affection = Number(localStorage.getItem('minis-aff') || 0);
+  let skin = localStorage.getItem('minis-skin') || 'milk';
+  let doneTimer = null, demoId = 0, captionTimer = null;
+  let mic = null; // { analyser, data, level }
+
+  // ── 状态切换（相当于 Rive 里设置 state 输入） ──
+  function setState(name, opts = {}) {
+    const idx = STATES.indexOf(name);
+    if (idx < 0) return;
+    if (!opts.fromDemo) demoId++;
+    clearTimeout(doneTimer);
+    inputs.state = idx;
+    if (opts.tool != null) inputs.tool = opts.tool;
+    inputs.talking = name === 'speaking';
+    sim.lastInteract = performance.now();
+    svg.dataset.state = name;
+
+    if (name === 'done') {
+      hop(230);
+      burstStars(12);
+      doneTimer = setTimeout(() => setState('idle', { fromDemo: true }), 2600);
+    }
+    if (name === 'error') sim.shakeT = 0.6;
+    if (name === 'speaking') showCaption(opts.caption || '你好呀，我是 Minis～今天想让我帮你做点什么？');
+    else hideCaption();
+    renderButtons();
+  }
+
+  // ── 交互：戳 / 摸 ──
+  const charEl = $('char');
+  let drag = null;
+  charEl.addEventListener('pointerdown', (e) => {
+    drag = { x: e.clientX, y: e.clientY, dist: 0, t: performance.now(), lastHeart: 0 };
+    charEl.setPointerCapture(e.pointerId);
+  });
+  charEl.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    drag.dist += Math.hypot(e.clientX - drag.x, e.clientY - drag.y);
+    drag.x = e.clientX; drag.y = e.clientY;
+    const now = performance.now();
+    if (drag.dist > 40 && now - drag.lastHeart > 220) {
+      drag.lastHeart = now;
+      pet(now);
+    }
+  });
+  const endDrag = () => {
+    if (!drag) return;
+    const quick = performance.now() - drag.t < 450;
+    if (drag.dist < 10 && quick) tap();
+    drag = null;
+  };
+  charEl.addEventListener('pointerup', endDrag);
+  charEl.addEventListener('pointercancel', () => { drag = null; });
+
+  function tap() {
+    const now = performance.now();
+    sim.lastInteract = now;
+    if (STATES[inputs.state] === 'sleeping') {
+      setState('idle');
+      sim.surpriseUntil = now + 700;
+      sim.waveUntil = now + 2200;
+      hop(260);
+      return;
+    }
+    sim.squeezeUntil = now + 320;
+    sim.happyUntil = now + 1500;
+    sim.squash = 0.14;
+    hop(170);
+    spawnHeart();
+    addAffection(1);
+  }
+
+  function pet(now) {
+    sim.lastInteract = now;
+    if (STATES[inputs.state] === 'sleeping') setState('idle');
+    sim.happyUntil = now + 1500;
+    sim.petUntil = now + 600;
+    spawnHeart();
+    addAffection(0.5);
+  }
+
+  function hop(power) {
+    if (reduceMotion) return;
+    if (sim.hopY === 0) sim.hopV = -power;
+  }
+
+  // ── 亲密度 / 皮肤 ──
+  function levelOf(a) { let lv = 0; LEVELS.forEach((v, i) => { if (a >= v) lv = i; }); return lv; }
+  function addAffection(n) {
+    const before = levelOf(affection);
+    affection = Math.round((affection + n) * 10) / 10;
+    localStorage.setItem('minis-aff', affection);
+    const after = levelOf(affection);
+    if (after > before) {
+      const unlocked = SKINS.find((s) => s.lv === after);
+      toast(`亲密度升到 Lv${after}${unlocked ? `，解锁「${unlocked.name}」皮肤` : ''} 🎉`);
+      burstStars(14);
+      hop(220);
+    }
+    renderAffection();
+  }
+  function renderAffection() {
+    const lv = levelOf(affection);
+    const next = LEVELS[lv + 1];
+    $('affLv').textContent = `Lv${lv}`;
+    $('affNum').textContent = next ? `${affection} / ${next}` : `${affection}（满级）`;
+    const lo = LEVELS[lv];
+    $('affBar').style.width = next ? `${((affection - lo) / (next - lo)) * 100}%` : '100%';
+    renderButtons();
+  }
+  function applySkin(id) {
+    skin = id;
+    localStorage.setItem('minis-skin', id);
+    SKINS.forEach((s) => document.body.classList.toggle(`skin-${s.id}`, s.id === id));
+    renderButtons();
+  }
+
+  // ── 字幕气泡 ──
+  function showCaption(text) {
+    clearInterval(captionTimer);
+    const el = $('bubble');
+    el.textContent = '';
+    el.classList.add('show');
+    let i = 0;
+    captionTimer = setInterval(() => {
+      el.textContent = text.slice(0, ++i);
+      if (i >= text.length) clearInterval(captionTimer);
+    }, 70);
+  }
+  function hideCaption() { clearInterval(captionTimer); $('bubble').classList.remove('show'); }
+
+  let toastTimer;
+  function toast(msg) {
+    const el = $('toast');
+    el.textContent = msg;
+    el.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.remove('show'), 2400);
+  }
+
+  // ── 粒子 ──
+  const particles = [];
+  const HEART = 'M0 4 C-9 -3 -5 -11 0 -5 C5 -11 9 -3 0 4 Z';
+  const STAR = 'M0 -6 Q1 -1 6 0 Q1 1 0 6 Q-1 1 -6 0 Q-1 -1 0 -6 Z';
+  function spawn(d, fill, x, y, vx, vy, life, scale) {
+    const el = document.createElementNS(NS, 'path');
+    el.setAttribute('d', d);
+    el.setAttribute('fill', fill);
+    $('particles').appendChild(el);
+    particles.push({ el, x, y, vx, vy, life, max: life, scale });
+  }
+  function spawnHeart() {
+    spawn(HEART, 'var(--cheek)', 120 + (Math.random() - 0.5) * 70, 84, (Math.random() - 0.5) * 30, -60 - Math.random() * 30, 1.3, 1.1 + Math.random() * 0.5);
+  }
+  function burstStars(n) {
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * Math.PI * 2;
+      const sp = 90 + Math.random() * 60;
+      spawn(STAR, 'var(--accent)', 120, 128, Math.cos(a) * sp, Math.sin(a) * sp - 40, 1.0, 1 + Math.random());
+    }
+  }
+  function updateParticles(dt) {
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      p.life -= dt;
+      if (p.life <= 0) { p.el.remove(); particles.splice(i, 1); continue; }
+      p.vy += 40 * dt;
+      p.x += p.vx * dt; p.y += p.vy * dt;
+      const k = p.life / p.max;
+      p.el.setAttribute('transform', `translate(${p.x.toFixed(1)} ${p.y.toFixed(1)}) scale(${(p.scale * (0.6 + 0.4 * k)).toFixed(2)})`);
+      p.el.setAttribute('opacity', Math.min(1, k * 1.5).toFixed(2));
+    }
+  }
+
+  // ── 音量来源：麦克风，或者模拟的说话包络 ──
+  function speechEnvelope(t) {
+    const syllable = Math.max(0, Math.sin(t * 11));
+    const accent = 0.55 + 0.45 * Math.abs(Math.sin(t * 3.3));
+    const phrase = Math.sin(t * 1.7) > -0.6 ? 1 : 0.1;
+    return Math.min(1, syllable * accent * phrase);
+  }
+  function micLevel() {
+    if (!mic) return null;
+    mic.analyser.getByteTimeDomainData(mic.data);
+    let sum = 0;
+    for (const v of mic.data) { const x = (v - 128) / 128; sum += x * x; }
+    const rms = Math.sqrt(sum / mic.data.length);
+    mic.level += (Math.min(1, rms * 6) - mic.level) * 0.4;
+    return mic.level;
+  }
+  async function toggleMic() {
+    if (mic) {
+      mic.stream.getTracks().forEach((t) => t.stop());
+      mic.ctx.close();
+      mic = null;
+      renderButtons();
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const ctx = new AudioContext();
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 512;
+      ctx.createMediaStreamSource(stream).connect(analyser);
+      mic = { stream, ctx, analyser, data: new Uint8Array(analyser.fftSize), level: 0 };
+      toast('麦克风已开启：切到「聆听」或「说话」试试');
+    } catch (e) {
+      toast('拿不到麦克风。用 file:// 打开时浏览器可能会拦截，可以起一个本地服务器再试');
+    }
+    renderButtons();
+  }
+
+  // ── 由状态推导表情（Rive 里对应各个 Layer 的状态） ──
+  function moodFor(st, now) {
+    if (now < sim.squeezeUntil) return { eyes: 'x', brow: 'none', mouth: 'o' };
+    if (now < sim.surpriseUntil) return { eyes: 'open', brow: 'up', mouth: 'o', eyeScale: 1.15 };
+    if (now < sim.happyUntil && st !== 'speaking') return { eyes: 'happy', brow: 'none', mouth: 'bigsmile' };
+    switch (st) {
+      case 'listening': return { eyes: 'open', brow: 'up', mouth: 'smallsmile', eyeScale: 1.08 };
+      case 'thinking':  return { eyes: 'open', brow: 'think', mouth: 'flat' };
+      case 'working':   return { eyes: 'open', brow: 'focus', mouth: 'flat' };
+      case 'speaking':  return { eyes: 'open', brow: 'none', mouth: 'talk' };
+      case 'done':      return { eyes: 'happy', brow: 'none', mouth: 'bigsmile' };
+      case 'error':     return { eyes: 'x', brow: 'worried', mouth: 'frown' };
+      case 'sleeping':  return { eyes: 'closed', brow: 'none', mouth: 'flat' };
+      default:          return { eyes: 'open', brow: 'none', mouth: 'smile' };
+    }
+  }
+  const MOUTH = {
+    smile: { curve: 6, open: 0 }, smallsmile: { curve: 4, open: 0 }, flat: { curve: 1, open: 0 },
+    bigsmile: { curve: 9, open: 0.45 }, frown: { curve: -5, open: 0 }, talk: { curve: 5, open: 0 }, o: { curve: 0, open: 0.6 },
+  };
+
+  function mouthPath(kind, curve, open) {
+    const y = 166;
+    if (kind === 'o') {
+      const r = 2.5 + open * 4.5;
+      return { line: '', fill: `M${120 - r} ${y} Q120 ${y - r * 1.4} ${120 + r} ${y} Q120 ${y + r * 1.5} ${120 - r} ${y} Z`, tongue: 0 };
+    }
+    if (open >= 0.06) {
+      const w = 6.5;
+      const bottom = y + Math.max(3, curve) + open * 13;
+      return {
+        line: '',
+        fill: `M${120 - w} ${y} Q120 ${y + curve * 0.25} ${120 + w} ${y} Q120 ${bottom} ${120 - w} ${y} Z`,
+        tongue: Math.min(1, (open - 0.15) * 4), tongueY: y + (bottom - y) * 0.75,
+      };
+    }
+    if (kind === 'frown') return { line: `M114 ${y + 2} Q120 ${y - 2.5} 126 ${y + 2}`, fill: '', tongue: 0 };
+    if (kind === 'flat')  return { line: `M116 ${y} Q120 ${y + 1} 124 ${y}`, fill: '', tongue: 0 };
+    // 一条细细的笑线
+    const c = Math.max(1.5, curve * 0.9);
+    return { line: `M112.5 ${y - 1} Q120 ${y + c} 127.5 ${y - 1}`, fill: '', tongue: 0 };
+  }
+
+  const ease = (cur, target, dt, speed) => cur + (target - cur) * (1 - Math.exp(-dt * speed));
+  const pivot = (x, y, deg) => `rotate(${deg.toFixed(2)} ${x} ${y})`;
+
+  // ── 主循环 ──
+  let last = performance.now();
+  let inputsViewTick = 0;
+  function frame(now) {
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    sim.t += dt;
+    const t = sim.t;
+    const st = STATES[inputs.state];
+
+    if (st === 'idle' && now - sim.lastInteract > 25000) setState('sleeping');
+
+    const mood = moodFor(st, now);
+    svg.dataset.eyes = mood.eyes;
+    svg.dataset.brow = mood.brow;
+
+    // 音量
+    let vol = 0;
+    if (st === 'speaking') vol = micLevel() ?? speechEnvelope(t);
+    else if (st === 'listening') vol = micLevel() ?? Math.max(0, speechEnvelope(t * 0.8 + 3) * 0.8);
+    inputs.volume = Math.round(vol * 100);
+
+    // 视线
+    let tx = pointer.x * 6, ty = pointer.y * 4;
+    if (st === 'thinking') { tx = 5 + Math.sin(t * 0.8) * 1.5; ty = -5; }
+    if (st === 'working')  { tx = 6; ty = 1 + Math.sin(t * 3) * 0.8; }
+    if (st === 'sleeping') { tx = 0; ty = 2; }
+    if (st === 'error')    { tx = Math.sin(t * 2) * 2; ty = 0; }
+    sim.lookX = ease(sim.lookX, tx, dt, reduceMotion ? 40 : 9);
+    sim.lookY = ease(sim.lookY, ty, dt, reduceMotion ? 40 : 9);
+    $('face').setAttribute('transform', `translate(${sim.lookX.toFixed(2)} ${(sim.lookY + 3).toFixed(2)})`);
+
+    // 眨眼（独立的一层，和其他状态叠加）
+    let lid = 1;
+    if (mood.eyes === 'open') {
+      if (sim.blinkPhase < 0) {
+        sim.nextBlink -= dt;
+        if (sim.nextBlink <= 0) sim.blinkPhase = 0;
+      } else {
+        sim.blinkPhase += dt / 0.16;
+        lid = sim.blinkPhase < 0.5 ? 1 - sim.blinkPhase * 1.8 : 0.1 + (sim.blinkPhase - 0.5) * 1.8;
+        if (sim.blinkPhase >= 1) {
+          sim.blinkPhase = -1;
+          sim.nextBlink = Math.random() < 0.15 ? 0.15 : 2 + Math.random() * 3.5;
+          lid = 1;
+        }
+      }
+    }
+    const es = mood.eyeScale || 1;
+    for (const [id, cx] of [['eyeL', 92], ['eyeR', 148]]) {
+      $(id).setAttribute('transform', `translate(${cx} 150) scale(${es} ${(es * Math.max(0.08, lid)).toFixed(3)}) translate(${-cx} -150)`);
+    }
+
+    // 嘴
+    const m = MOUTH[mood.mouth];
+    let openTarget = m.open;
+    if (mood.mouth === 'talk') openTarget = vol * 0.9;
+    sim.mouth = ease(sim.mouth, openTarget, dt, 22);
+    sim.curve = ease(sim.curve, m.curve, dt, 12);
+    const mp = mouthPath(mood.mouth, sim.curve, sim.mouth);
+    $('mouthLine').setAttribute('d', mp.line);
+    $('mouthFill').setAttribute('d', mp.fill);
+    $('mouthClipPath').setAttribute('d', mp.fill);
+    $('tongue').setAttribute('opacity', Math.max(0, mp.tongue).toFixed(2));
+    if (mp.tongueY) $('tongue').setAttribute('cy', mp.tongueY.toFixed(1));
+
+    // 腮红
+    sim.blush = ease(sim.blush ?? 0.45, mood.eyes === 'happy' ? 0.9 : 0.45, dt, 6);
+    $('cheeks').setAttribute('opacity', sim.blush.toFixed(2));
+
+    // 耳朵
+    let earTarget = Math.sin(t * 1.3) * 2;
+    if (st === 'listening') earTarget = 6 + Math.sin(t * 8) * vol * 4;
+    if (st === 'sleeping' || st === 'error') earTarget = -14;
+    if (now < sim.petUntil) earTarget = Math.sin(t * 24) * 9;
+    sim.earL = ease(sim.earL, earTarget, dt, 10);
+    const flick = (v) => Math.sin(v * Math.PI * 3) * 14 * v;
+    $('earL').setAttribute('transform', pivot(86, 95, sim.earL + flick(sim.twitchL)));
+    $('earR').setAttribute('transform', pivot(154, 95, -sim.earL - flick(sim.twitchR)));
+
+    // 待机时耳朵偶尔抖一下
+    if (st === 'idle' && !reduceMotion && (sim.nextTwitch -= dt) <= 0) {
+      sim.nextTwitch = 4 + Math.random() * 5;
+      if (Math.random() < 0.5) sim.twitchL = 1; else sim.twitchR = 1;
+    }
+    sim.twitchL = Math.max(0, sim.twitchL - dt * 3);
+    sim.twitchR = Math.max(0, sim.twitchR - dt * 3);
+
+    // 待机时身边偶尔飘过小星星
+    if ((st === 'idle' || st === 'listening') && !reduceMotion && (sim.nextTwinkle -= dt) <= 0) {
+      sim.nextTwinkle = 2.5 + Math.random() * 3;
+      const side = Math.random() < 0.5 ? -1 : 1;
+      spawn(STAR, 'var(--accent2)', 120 + side * (70 + Math.random() * 20), 120 + Math.random() * 40, side * 4, -14, 2.2, 0.8 + Math.random() * 0.5);
+    }
+
+    // 手臂
+    let aL = 0, aR = 0;
+    if (st === 'working') aR = -55 + Math.sin(t * 3) * 4;
+    if (st === 'done') { aL = 110 + Math.sin(t * 10) * 12; aR = -110 - Math.sin(t * 10) * 12; }
+    if (st === 'thinking') aR = -25;
+    if (st === 'speaking') { aL = Math.sin(t * 2.2) * 10; aR = -Math.sin(t * 2.2 + 1) * 10; }
+    if (now < sim.petUntil) { aL = 20; aR = -20; }
+    if (now < sim.waveUntil && st !== 'working') aR = -108 + Math.sin(t * 14) * 22;
+    sim.armL = ease(sim.armL, aL, dt, 10);
+    sim.armR = ease(sim.armR, aR, dt, 10);
+    $('armL').setAttribute('transform', pivot(44, 162, sim.armL));
+    $('armR').setAttribute('transform', pivot(196, 162, sim.armR));
+
+    // 道具
+    document.querySelectorAll('.prop').forEach((el) => {
+      el.style.opacity = st === 'working' && Number(el.dataset.tool) === inputs.tool ? 1 : 0;
+    });
+    $('prop').setAttribute('transform', `translate(218 ${(144 + Math.sin(t * 3) * 2).toFixed(2)})`);
+
+    // 小星星：干活 / 思考 / 完成时冒出来，转着发光
+    let spin = Math.sin(t * 1.1) * 12, glow = 0, starOn = 0;
+    if (st === 'thinking') { spin = t * 240; glow = 0.6 + Math.sin(t * 6) * 0.4; starOn = 1; }
+    if (st === 'working')  { glow = 0.4 + Math.sin(t * 8) * 0.3; starOn = 1; }
+    if (st === 'done')     { spin = t * 360; glow = 1; starOn = 1; }
+    if (reduceMotion) spin = 0;
+    sim.starOn = ease(sim.starOn ?? 0, starOn, dt, 8);
+    $('star').setAttribute('transform', `translate(56 ${(58 + Math.sin(t * 2.4) * 3).toFixed(2)}) scale(${sim.starOn.toFixed(3)})`);
+    $('starShape').setAttribute('transform', `rotate(${(spin % 360).toFixed(1)})`);
+    $('starGlow').setAttribute('opacity', glow.toFixed(2));
+
+    // 声波
+    if (st === 'listening') {
+      $('waveL1').setAttribute('opacity', (0.3 + vol * 0.7).toFixed(2));
+      $('waveR1').setAttribute('opacity', (0.3 + vol * 0.7).toFixed(2));
+      $('waveL2').setAttribute('opacity', Math.max(0, vol * 1.4 - 0.4).toFixed(2));
+      $('waveR2').setAttribute('opacity', Math.max(0, vol * 1.4 - 0.4).toFixed(2));
+    }
+
+    // 身体：呼吸 + 跳跃（重力）+ 落地挤压 + 摇头 + 歪头
+    const period = st === 'sleeping' ? 4.5 : st === 'working' ? 1.2 : 3.2;
+    const amp = reduceMotion ? 0 : (st === 'sleeping' ? 0.035 : st === 'working' ? 0.014 : 0.025);
+    const breath = Math.sin((t / period) * Math.PI * 2) * amp;
+
+    if (sim.hopV !== 0 || sim.hopY < 0) {
+      sim.hopV += 1100 * dt;
+      sim.hopY += sim.hopV * dt;
+      if (sim.hopY >= 0) { sim.hopY = 0; sim.hopV = 0; sim.squash = 0.16; }
+    }
+    sim.squash = ease(sim.squash, 0, dt, 12);
+
+    let shakeX = 0;
+    if (sim.shakeT > 0) {
+      sim.shakeT = Math.max(0, sim.shakeT - dt);
+      if (!reduceMotion) shakeX = Math.sin(sim.shakeT * 45) * 5 * (sim.shakeT / 0.6);
+    }
+
+    let tiltT = 0, leanT = 0;
+    if (st === 'thinking') tiltT = 5;
+    if (st === 'error') tiltT = -4;
+    if (st === 'listening') leanT = 0.03;
+    if (st === 'idle') {
+      if ((sim.idleTiltTimer = (sim.idleTiltTimer ?? 3) - dt) <= 0) {
+        sim.idleTiltTimer = 3 + Math.random() * 4;
+        sim.idleTilt = [-6, 0, 0, 6][Math.floor(Math.random() * 4)];
+      }
+      tiltT = sim.idleTilt || 0;
+    }
+    if (now < sim.petUntil) tiltT = Math.sin(t * 6) * 4;
+    sim.tilt = ease(sim.tilt, reduceMotion ? 0 : tiltT, dt, 6);
+    sim.lean = ease(sim.lean, leanT, dt, 6);
+
+    const stretch = reduceMotion ? 0 : Math.max(-0.06, Math.min(0.1, -sim.hopV / 2400));
+    const sy = 1 + breath - sim.squash + sim.lean + stretch;
+    const sx = 1 - breath * 0.5 + sim.squash * 0.8 + sim.lean * 0.5 - stretch * 0.6;
+    $('char').setAttribute('transform',
+      `translate(${(120 + shakeX).toFixed(2)} ${(205 + sim.hopY).toFixed(2)}) rotate(${sim.tilt.toFixed(2)}) scale(${sx.toFixed(4)} ${sy.toFixed(4)}) translate(-120 -205)`);
+    const shadowScale = 1 + sim.hopY / 120;
+    $('shadow').setAttribute('transform', `translate(120 212) scale(${shadowScale.toFixed(3)} 1) translate(-120 -212)`);
+
+    updateParticles(dt);
+
+    if ((inputsViewTick += dt) > 0.1) {
+      inputsViewTick = 0;
+      $('inputsView').textContent =
+        `state    = ${inputs.state}  (${st})\n` +
+        `tool     = ${inputs.tool}  (${TOOLS[inputs.tool]})\n` +
+        `talking  = ${inputs.talking}\n` +
+        `volume   = ${inputs.volume}\n` +
+        `skin     = ${SKINS.findIndex((s) => s.id === skin)}  (${skin})\n` +
+        `affection= ${affection}  (Lv${levelOf(affection)})`;
+      $('stateTag').textContent = `${st} · ${STATE_LABEL[inputs.state]}`;
+    }
+
+    requestAnimationFrame(frame);
+  }
+
+  // 眼睛跟随指针
+  addEventListener('pointermove', (e) => {
+    const r = svg.getBoundingClientRect();
+    const cx = r.left + r.width / 2, cy = r.top + r.height * 0.58;
+    pointer.x = Math.max(-1, Math.min(1, (e.clientX - cx) / 300));
+    pointer.y = Math.max(-1, Math.min(1, (e.clientY - cy) / 300));
+  });
+
+  // ── 一键演示：一次完整的 Agent 任务 ──
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  async function runDemo() {
+    const id = ++demoId;
+    const steps = [
+      ['listening', 2000],
+      ['thinking', 1800],
+      ['working', 1500, { tool: 4 }],
+      ['working', 1500, { tool: 1 }],
+      ['working', 1300, { tool: 2 }],
+      ['working', 1100, { tool: 3 }],
+      ['speaking', 4200, { caption: '查好啦：明天杭州多云，18–24°C，下午可能有阵雨，记得带伞 ☂️' }],
+      ['done', 0],
+    ];
+    for (const [name, ms, opts] of steps) {
+      if (id !== demoId) return;
+      setState(name, { ...(opts || {}), fromDemo: true });
+      if (ms) await sleep(ms);
+    }
+  }
+
+  // ── 控制面板 ──
+  function renderButtons() {
+    $('stateBtns').innerHTML = '';
+    STATES.forEach((s, i) => {
+      const b = document.createElement('button');
+      b.textContent = `${i + 1} ${STATE_LABEL[i]}`;
+      b.className = inputs.state === i ? 'on' : '';
+      b.onclick = () => setState(s);
+      $('stateBtns').appendChild(b);
+    });
+    $('toolBtns').innerHTML = '';
+    TOOLS.forEach((name, i) => {
+      if (i === 0) return;
+      const b = document.createElement('button');
+      b.textContent = name;
+      b.className = inputs.tool === i ? 'on' : '';
+      b.onclick = () => { inputs.tool = i; setState('working'); };
+      $('toolBtns').appendChild(b);
+    });
+    $('skinBtns').innerHTML = '';
+    const lv = levelOf(affection);
+    SKINS.forEach((s) => {
+      const b = document.createElement('button');
+      const locked = lv < s.lv;
+      b.textContent = locked ? `🔒 ${s.name} · Lv${s.lv}` : s.name;
+      b.disabled = locked;
+      b.className = skin === s.id ? 'on' : '';
+      b.onclick = () => applySkin(s.id);
+      $('skinBtns').appendChild(b);
+    });
+    $('micBtn').className = mic ? 'on' : '';
+    $('micBtn').textContent = mic ? '🎙 麦克风：开' : '🎙 用麦克风驱动嘴型';
+  }
+
+  $('demoBtn').onclick = runDemo;
+  $('micBtn').onclick = toggleMic;
+  $('darkBtn').onclick = () => {
+    document.body.classList.toggle('dark');
+    $('darkBtn').className = document.body.classList.contains('dark') ? 'on' : '';
+  };
+  $('resetBtn').onclick = () => { affection = 0; localStorage.setItem('minis-aff', 0); applySkin('milk'); renderAffection(); };
+
+  addEventListener('keydown', (e) => {
+    const n = Number(e.key);
+    if (n >= 1 && n <= STATES.length) setState(STATES[n - 1]);
+    if (e.key === 't' || e.key === 'T') { inputs.tool = (inputs.tool % 4) + 1; setState('working'); }
+  });
+
+  const saved = SKINS.find((s) => s.id === skin);
+  if (!saved || levelOf(affection) < saved.lv) skin = 'milk';
+  applySkin(skin);
+  renderAffection();
+  setState('idle');
+  sim.waveUntil = performance.now() + 2200;
+  sim.happyUntil = performance.now() + 2200;
+  requestAnimationFrame(frame);
+
+  // 给宣传片（promo/）用的控制接口：它加载这个页面，按分镜驱动同一套形象和动画
+  window.minis = { sim, inputs, pointer, setState, tap, pet, hop, applySkin, burstStars, spawnHeart, STATES };
+})();
+</script>
+</body>
+</html>
