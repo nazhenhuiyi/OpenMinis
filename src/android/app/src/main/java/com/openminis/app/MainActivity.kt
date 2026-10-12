@@ -567,11 +567,18 @@ class MainActivity : ComponentActivity() {
                 // docs/parity/android-keep-alive-audit.md).
                 DisposableEffect(navController) {
                     val job = lifecycleScope.launch {
-                        navController.currentBackStackEntryFlow.collect { entry ->
+                        // [T-today-tab] Today is an overlay above the NavHost, so the
+                        // chat route can sit underneath it; the user is only in that
+                        // chat while the Chat tab shows.
+                        kotlinx.coroutines.flow.combine(
+                            navController.currentBackStackEntryFlow,
+                            com.openminis.app.ui.today.MainTabs.tab,
+                        ) { entry, tab -> entry to tab }.collect { (entry, tab) ->
                             // [T-android-hang-caller-attribution] Let a stall
                             // sample name the screen it happened on.
                             com.openminis.app.diagnostics.HangDetector.noteScreen(entry.destination.route)
-                            val isChatRoute = entry.destination.route == Routes.CHAT
+                            val isChatRoute = entry.destination.route == Routes.CHAT &&
+                                tab == com.openminis.app.ui.today.MainTabs.Tab.CHAT
                             val sid = entry.arguments?.getString("sessionId").takeIf { isChatRoute }
                             val previous = currentChatSessionId
                             if (sid != previous) {
