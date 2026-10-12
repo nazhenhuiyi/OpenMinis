@@ -138,13 +138,14 @@ fun TodayScreen(
     val draft by vm.draft.collectAsState()
     val scope = rememberCoroutineScope()
     val clipboard = LocalClipboardManager.current
+    val haptics = androidx.compose.ui.platform.LocalHapticFeedback.current
     val zone = ZoneId.systemDefault()
 
     // Reload on every resume: picks up journal edits made in Obsidian or the
     // shell while we were in the background, and photos taken meanwhile.
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     LaunchedEffect(lifecycle) {
-        lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) { vm.reload() }
+        lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) { vm.onResumed() }
     }
 
     // ── Permissions (SPEC §7) ──
@@ -200,6 +201,10 @@ fun TodayScreen(
         ) launchCamera() else cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
     }
 
+    // The check-in sheet, and which habit's adjust panel it shows (null = the list).
+    var sheetOpen by remember { mutableStateOf(false) }
+    var sheetEditing by remember { mutableStateOf<String?>(null) }
+
     LaunchedEffect(vm) {
         vm.eventFlow.collect { e ->
             when (e) {
@@ -207,6 +212,15 @@ fun TodayScreen(
                 TodayViewModel.Event.NeedLocationPermission -> locationLauncher.launch(
                     arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION),
                 )
+                TodayViewModel.Event.AllHabitsDone -> {
+                    haptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                    Toast.makeText(context, R.string.today_habits_all_done, Toast.LENGTH_SHORT).show()
+                    // Ticked off the last one from the list: let the ring fill, then put the sheet away.
+                    if (sheetOpen && sheetEditing == null) {
+                        kotlinx.coroutines.delay(700)
+                        if (sheetEditing == null) sheetOpen = false
+                    }
+                }
             }
         }
     }
@@ -217,6 +231,7 @@ fun TodayScreen(
     // Photos to show and which one was tapped.
     var viewer by remember { mutableStateOf<Pair<List<CameraPhoto>, Int>?>(null) }
     var showAlbums by remember { mutableStateOf(false) }
+    var showHabits by remember { mutableStateOf(false) }
 
     val listState = rememberLazyListState()
     // Reverse layout: index 0 is the newest row, at the bottom.
@@ -238,7 +253,14 @@ fun TodayScreen(
                 today = state.today,
                 recordLocation = state.recordLocation,
                 onRecordLocation = vm::setRecordLocation,
+                showWeather = state.showWeather,
+                onShowWeather = vm::setShowWeather,
                 onAlbums = { showAlbums = true },
+                onHabits = { showHabits = true },
+                habits = state.todayHabits,
+                // No habits at all → a ghost chip that leads to the manager (SPEC §14.3).
+                ghostChip = state.habits.none { !it.archived },
+                onHabitsChip = { ghost -> if (ghost) showHabits = true else { sheetEditing = null; sheetOpen = true } },
             )
             LazyColumn(
                 state = listState,
@@ -247,7 +269,8 @@ fun TodayScreen(
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(start = 20.dp, end = 20.dp, top = 4.dp, bottom = 8.dp),
             ) {
                 for (day in state.days.asReversed()) {
-                    if (day.rows.isEmpty()) {
+                    // "Nothing yet" only when the day has neither notes nor any check-in done.
+                    if (day.rows.isEmpty() && day.checkIns.isEmpty() && (day.date != state.today || state.todayHabits.none { it.done > 0 })) {
                         item(key = "empty:${day.date}") {
                             Text(
                                 stringResource(R.string.today_empty),
@@ -285,7 +308,13 @@ fun TodayScreen(
                             )
                         }
                     }
-                    item(key = "day:${day.date}") { DayDivider(day.date, state.today) }
+                    // Reverse layout: emitted just before the divider = the first thing under it (§14.3).
+                    // Today: the live checklist plus read-only leftovers; past days: read-only.
+                    val block = if (day.date == state.today) state.todayHabits + day.checkIns else day.checkIns
+                    if (block.isNotEmpty()) item(key = "checkins:${day.date}") {
+                        CheckInBlock(block, onComplete = vm::completeHabit, onAdjust = { sheetEditing = it; sheetOpen = true })
+                    }
+                    item(key = "day:${day.date}") { DayDivider(day.date, state.today, day.weather?.takeIf { state.showWeather }) }
                 }
                 when (state.access) {
                     CameraRollSource.Access.NONE -> if (state.loaded) item(key = "perm") { PermissionCard(onAllow = requestPhotos) }
@@ -367,6 +396,30 @@ fun TodayScreen(
 
     viewer?.let { (photos, start) -> PhotoViewer(photos, start, zone, onDismiss = { viewer = null }) }
 
+    // ── Today's check-ins (SPEC §14.3) ──
+    if (sheetOpen) {
+        ModalBottomSheet(onDismissRequest = { sheetOpen = false }) {
+            HabitsSheetContent(
+                habits = state.todayHabits,
+                editingId = sheetEditing,
+                onEditingChange = { sheetEditing = it },
+                onComplete = vm::completeHabit,
+                onSet = vm::setHabitDone,
+                onManage = { sheetOpen = false; showHabits = true },
+            )
+        }
+    }
+
+    if (showHabits) {
+        HabitsManagerDialog(
+            habits = state.habits,
+            onAdd = vm::addHabit,
+            onUpdate = vm::updateHabit,
+            onArchive = vm::archiveHabit,
+            onDismiss = { showHabits = false },
+        )
+    }
+
     if (showAlbums) {
         AlbumsDialog(vm = vm, selected = state.includedAlbums, onDone = { vm.setIncludedAlbums(it); showAlbums = false })
     }
@@ -395,13 +448,20 @@ private fun TodayTopBar(
     today: LocalDate,
     recordLocation: Boolean,
     onRecordLocation: (Boolean) -> Unit,
+    showWeather: Boolean,
+    onShowWeather: (Boolean) -> Unit,
     onAlbums: () -> Unit,
+    onHabits: () -> Unit,
+    habits: List<com.openminis.app.data.journal.HabitProgress>,
+    ghostChip: Boolean,
+    onHabitsChip: (ghost: Boolean) -> Unit,
 ) {
     var menu by remember { mutableStateOf(false) }
     Row(Modifier.fillMaxWidth().padding(start = 18.dp, end = 6.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(stringResource(R.string.tab_today), fontSize = 22.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.width(10.dp))
         Text(dayLabel(today), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp, modifier = Modifier.weight(1f))
+        if (habits.isNotEmpty() || ghostChip) HabitsChip(habits, onClick = { onHabitsChip(habits.isEmpty()) })
         Box {
             IconButton(onClick = { menu = true }) { Icon(Icons.Outlined.MoreHoriz, contentDescription = null) }
             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
@@ -409,6 +469,16 @@ private fun TodayTopBar(
                     text = { Text(stringResource(R.string.today_settings_location)) },
                     trailingIcon = { Switch(checked = recordLocation, onCheckedChange = null) },
                     onClick = { onRecordLocation(!recordLocation) },
+                )
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.today_settings_weather)) },
+                    trailingIcon = { Switch(checked = showWeather, onCheckedChange = null) },
+                    onClick = { onShowWeather(!showWeather) },
+                )
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.today_habits_menu)) },
+                    onClick = { menu = false; onHabits() },
+                    modifier = Modifier.testTag("today_menu_habits"),
                 )
                 DropdownMenuItem(
                     text = { Text(stringResource(R.string.today_settings_albums)) },
@@ -425,15 +495,26 @@ private fun dayLabel(d: LocalDate): String {
 }
 
 @Composable
-private fun DayDivider(date: LocalDate, today: LocalDate) {
-    val label = when (date) {
+private fun DayDivider(date: LocalDate, today: LocalDate, weather: com.openminis.app.data.journal.DayWeather?) {
+    val day = when (date) {
         today -> stringResource(R.string.today_divider_today, dayLabel(date))
         today.minusDays(1) -> stringResource(R.string.today_divider_yesterday, dayLabel(date))
         else -> dayLabel(date)
     }
+    // The page header of a diary: "10月12日周一 · 🌦 小雨 18–23°" (SPEC §15.4).
+    val label = if (weather == null) day else
+        "$day · " + weather.summary(stringResource(com.openminis.app.data.journal.TodayWeather.label(weather.code)))
     Row(Modifier.fillMaxWidth().padding(top = 14.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.weight(1f).height(1.dp).background(MaterialTheme.colorScheme.outlineVariant))
-        Text(label, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 10.dp))
+        Text(
+            label,
+            fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            // Unweighted: measured first at its natural width; the rules share what is left.
+            modifier = Modifier.padding(horizontal = 10.dp),
+        )
         Box(Modifier.weight(1f).height(1.dp).background(MaterialTheme.colorScheme.outlineVariant))
     }
 }

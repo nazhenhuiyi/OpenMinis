@@ -55,7 +55,10 @@ object WeatherManager {
             "&forecast_hours=48" +
             "&forecast_days=10" +
             "&timezone=auto"
+        return getJson(url)
+    }
 
+    private fun getJson(url: String): JSONObject? {
         val request = Request.Builder().url(url).get().build()
         return try {
             val response = client.newCall(request).execute()
@@ -73,6 +76,16 @@ object WeatherManager {
             null
         }
     }
+
+    /**
+     * [T-today-weather] Just today's daily summary (code, max, min) for the
+     * Today tab's day header — a few hundred bytes instead of the full
+     * 48h/10-day payload above. Same client and error handling.
+     */
+    fun fetchTodayJson(latitude: Double, longitude: Double): JSONObject? = getJson(
+        "$BASE_URL?latitude=$latitude&longitude=$longitude" +
+            "&daily=weather_code,temperature_2m_max,temperature_2m_min&forecast_days=1&timezone=auto",
+    )
 
     private fun formatWeatherResponse(json: JSONObject, lat: Double, lon: Double): String {
         val sb = StringBuilder()

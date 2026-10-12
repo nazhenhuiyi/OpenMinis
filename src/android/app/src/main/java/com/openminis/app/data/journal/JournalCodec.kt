@@ -34,11 +34,7 @@ data class JournalEntry(
     /** The time a restore merge compares on (§8.4): last edit, else creation. */
     val revision: OffsetDateTime? get() = edited ?: at
 
-    fun withAttrs(update: Map<String, String?>): JournalEntry {
-        val next = LinkedHashMap(attrs)
-        for ((k, v) in update) if (v == null) next.remove(k) else next[k] = v
-        return copy(attrs = next)
-    }
+    fun withAttrs(update: Map<String, String?>): JournalEntry = copy(attrs = attrs.withUpdates(update))
 
     companion object {
         const val KEY_ID = "id"
@@ -60,6 +56,13 @@ data class JournalEntry(
     }
 }
 
+/** A copy of metadata attrs with [update] applied in place (null = remove); order is kept. */
+internal fun LinkedHashMap<String, String>.withUpdates(update: Map<String, String?>): LinkedHashMap<String, String> {
+    val next = LinkedHashMap(this)
+    for ((k, v) in update) if (v == null) next.remove(k) else next[k] = v
+    return next
+}
+
 /** An entry plus the exact character range it occupies in the source text. */
 data class JournalBlock(val entry: JournalEntry, val start: Int, val end: Int)
 
@@ -72,14 +75,10 @@ class JournalDocument(val text: String, val headEnd: Int, val blocks: List<Journ
     val entries: List<JournalEntry> get() = blocks.map { it.entry }
 
     /** `date:` from the front matter, if present. */
-    val frontMatterDate: String?
-        get() {
-            val m = FRONT_MATTER.find(text) ?: return null
-            return m.groupValues[1].lineSequence()
-                .map { it.trim() }
-                .firstOrNull { it.startsWith("date:") }
-                ?.removePrefix("date:")?.trim()
-        }
+    val frontMatterDate: String? get() = frontMatter["date"]
+
+    /** Simple `key: value` pairs of the front matter, quotes removed (§4.3, §15). */
+    val frontMatter: Map<String, String> get() = JournalCodec.frontMatterValues(text)
 
     /**
      * Markers that look like entry metadata but did not parse as one — a sign
@@ -89,7 +88,6 @@ class JournalDocument(val text: String, val headEnd: Int, val blocks: List<Journ
         get() = MARKER.findAll(text).count() - blocks.size
 
     private companion object {
-        val FRONT_MATTER = Regex("\\A---\\r?\\n([\\s\\S]*?)\\r?\\n---")
         val MARKER = Regex("<!--\\s*minis:entry")
     }
 }
@@ -107,6 +105,43 @@ object JournalCodec {
     fun headingFor(t: OffsetDateTime): String = HEADING_FMT.format(t)
 
     fun frontMatter(date: LocalDate): String = "---\ndate: $date\n---\n"
+
+    private val FRONT_MATTER = Regex("\\A---\\r?\\n([\\s\\S]*?)\\r?\\n---[ \\t]*(\\r?\\n|\\z)")
+    private val FM_LINE = Regex("^([A-Za-z_][A-Za-z0-9_-]*):\\s*(.*?)\\s*$")
+
+    fun frontMatterValues(text: String): Map<String, String> {
+        val m = FRONT_MATTER.find(text) ?: return emptyMap()
+        val out = LinkedHashMap<String, String>()
+        for (line in m.groupValues[1].lines()) {
+            val kv = FM_LINE.find(line.removeSuffix("\r")) ?: continue
+            out[kv.groupValues[1]] = kv.groupValues[2].removeSurrounding("\"")
+        }
+        return out
+    }
+
+    /**
+     * Set front matter keys (null = remove), keeping every other line of the
+     * front matter and every byte after it untouched. Text without front
+     * matter gets one.
+     */
+    fun withFrontMatter(text: String, updates: Map<String, String?>): String {
+        fun render(k: String, v: String) = "$k: " + if (v.isEmpty() || v.any { it == ':' || it == '#' || it == '"' } || v != v.trim()) "\"${v.replace("\"", "'")}\"" else v
+        val m = FRONT_MATTER.find(text)
+        val lines = m?.groupValues?.get(1)?.lines().orEmpty()
+        val pending = LinkedHashMap(updates)
+        val out = ArrayList<String>()
+        for (line in lines) {
+            val key = FM_LINE.find(line.removeSuffix("\r"))?.groupValues?.get(1)
+            if (key != null && pending.containsKey(key)) {
+                pending.remove(key)?.let { out += render(key, it) }
+            } else {
+                out += line
+            }
+        }
+        for ((k, v) in pending) if (v != null) out += render(k, v)
+        val fm = "---\n" + out.joinToString("\n") + "\n---\n"
+        return if (m != null) fm + text.substring(m.range.last + 1) else fm + "\n" + text
+    }
 
     // ── Parsing (§4.3) ────────────────────────────────────────────────────
 

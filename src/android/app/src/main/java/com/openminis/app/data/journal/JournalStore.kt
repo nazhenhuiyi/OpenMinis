@@ -36,6 +36,9 @@ class JournalStore(
     /** Bumps on every write here and on any change seen in the watched folders. */
     val changes: StateFlow<Long> = _changes.asStateFlow()
 
+    /** The store's clock, so callers (and tests) agree on what "now" and "today" are. */
+    fun now(): OffsetDateTime = clock()
+
     fun fileFor(date: LocalDate): File =
         File(root, "%04d/%02d/%s.md".format(date.year, date.monthValue, date))
 
@@ -114,10 +117,85 @@ class JournalStore(
         return ok
     }
 
+    /** Set front matter keys of a day file (weather, §15); entries are left byte for byte. */
+    suspend fun setFrontMatter(date: LocalDate, updates: Map<String, String?>) =
+        mutate(date) { text -> JournalCodec.withFrontMatter(text?.takeIf { it.isNotBlank() } ?: JournalCodec.frontMatter(date), updates) }
+
+    // ── Daily check-ins (§14) ─────────────────────────────────────────────
+
+    val habitsFile: File get() = File(root, HabitCodec.FILE_NAME)
+
+    suspend fun readHabits(): List<Habit> = withContext(Dispatchers.IO) {
+        val f = habitsFile
+        if (!f.isFile) emptyList() else HabitCodec.parse(f.readText())
+    }
+
+    suspend fun addHabit(name: String, target: Int?, unit: String?, days: Set<java.time.DayOfWeek>?): Habit {
+        val habit = Habit.create(Ulid.generate(clock().toInstant().toEpochMilli()), name, target, unit, days)
+        mutateFile(habitsFile) { text -> HabitCodec.append(text, habit) }
+        return habit
+    }
+
+    /** Rewrite one habit's line (rename, new target, archive). */
+    suspend fun updateHabit(id: String, transform: (Habit) -> Habit): Boolean {
+        var ok = false
+        mutateFile(habitsFile) { text ->
+            text ?: return@mutateFile null
+            val habit = HabitCodec.parse(text).singleOrNull { it.id == id } ?: return@mutateFile null
+            HabitCodec.replace(text, id, transform(habit)).also { ok = it != null }
+        }
+        return ok
+    }
+
+    /**
+     * Set the day's total for [habit] to [total] (§14.2). The check-in entries
+     * of that habit are summed; the last one absorbs the change, the others
+     * are only touched when the new total is below them. 0 removes them all.
+     * Callers enforce "today only" (§14.1); this is also what restore and tests use.
+     */
+    suspend fun setCheckIn(date: LocalDate, habit: Habit, total: Int, by: String? = null) {
+        val habitId = habit.id ?: return
+        val now = clock()
+        mutate(date) { text ->
+            val entries = text?.let { JournalCodec.parse(it).entries }.orEmpty()
+                .filter { CheckIns.habitId(it) == habitId && it.id != null }
+            var next = text
+            if (total <= 0) {
+                for (e in entries) next = next?.let { JournalCodec.replace(it, e.id!!, null) } ?: return@mutate null
+                return@mutate next
+            }
+            if (entries.isEmpty()) {
+                // A check-in made today is stamped now; another day keeps its own date.
+                val at = if (now.toLocalDate() == date) now else date.atTime(12, 0).atZone(zone()).toOffsetDateTime()
+                var e = JournalEntry.create(Ulid.generate(at.toInstant().toEpochMilli()), at, CheckIns.body(habit, total))
+                e = e.withAttrs(mapOf(CheckIns.KEY_HABIT to habitId, CheckIns.KEY_DONE to total.toString(), JournalEntry.KEY_BY to by))
+                return@mutate JournalCodec.append(text, date, e)
+            }
+            val others = entries.dropLast(1)
+            val keep = if (others.sumOf(CheckIns::done) < total) {
+                others
+            } else {
+                for (e in others) next = next?.let { JournalCodec.replace(it, e.id!!, null) } ?: return@mutate null
+                emptyList()
+            }
+            val last = entries.last()
+            val lastDone = total - keep.sumOf(CheckIns::done)
+            val updated = last.copy(body = CheckIns.body(habit, total)).withAttrs(
+                mapOf(
+                    CheckIns.KEY_DONE to lastDone.toString(),
+                    JournalEntry.KEY_EDITED to JournalCodec.formatTime(now),
+                    JournalEntry.KEY_BY to by,
+                ),
+            )
+            next?.let { JournalCodec.replace(it, last.id!!, updated) }
+        }
+    }
+
     /** Read-modify-write under the lock; [edit] returns null to leave the file alone. */
-    private suspend fun mutate(date: LocalDate, edit: (String?) -> String?) = withContext(Dispatchers.IO) {
+    private suspend fun mutate(date: LocalDate, edit: (String?) -> String?) = mutateFile(fileFor(date), edit)
+
+    private suspend fun mutateFile(f: File, edit: (String?) -> String?) = withContext(Dispatchers.IO) {
         lock.withLock {
-            val f = fileFor(date)
             val current = if (f.isFile) f.readText() else null
             val next = edit(current) ?: return@withLock
             if (next != current) {
@@ -125,6 +203,13 @@ class JournalStore(
                 _changes.value = _changes.value + 1
             }
         }
+    }
+
+    /** Restore merge of habits.md (§14.5). */
+    suspend fun mergeHabits(incoming: String): Int {
+        var added = 0
+        mutateFile(habitsFile) { text -> HabitCodec.merge(text, incoming)?.also { added = it.second }?.first }
+        return added
     }
 
     /** Replace a whole day file (restore). Same atomic write + change signal. */
@@ -145,7 +230,8 @@ class JournalStore(
      */
     @Synchronized
     fun watch(dates: Collection<LocalDate>) {
-        val dirs = dates.map { fileFor(it).parentFile!! }.toSet()
+        // The root holds habits.md (§14.2); day files live in the month folders.
+        val dirs = dates.map { fileFor(it).parentFile!! }.toSet() + root
         for (dir in dirs) {
             if (observers.containsKey(dir.path)) continue
             dir.mkdirs()

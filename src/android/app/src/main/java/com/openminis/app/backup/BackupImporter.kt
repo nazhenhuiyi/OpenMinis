@@ -701,6 +701,15 @@ class BackupImporter(
         val store = com.openminis.app.data.journal.JournalStore.get(context)
         val stamp = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).format(java.util.Date())
         for (file in src.walkTopDown().filter { it.isFile && it.name.endsWith(".md") }) {
+            // [T-today-habits] Check-in definitions merge by id (SPEC §14.5).
+            if (file.parentFile == src && file.name == com.openminis.app.data.journal.HabitCodec.FILE_NAME) {
+                val added = store.mergeHabits(file.readText())
+                if (added > 0) {
+                    report.filesWritten += 1
+                    report.imported += added
+                }
+                continue
+            }
             // Only well-formed day file names; anything else in the package is ignored.
             val date = runCatching { java.time.LocalDate.parse(file.name.removeSuffix(".md")) }.getOrNull()
             if (date == null) { report.rejectedPaths += 1; continue }

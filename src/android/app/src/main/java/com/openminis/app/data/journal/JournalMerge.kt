@@ -55,7 +55,11 @@ object JournalMerge {
                 isNewer(block.entry, slots[at].entry) -> { slots[at] = Slot(block.entry, raw); updated++ }
             }
         }
-        if (added == 0 && updated == 0) return Result.Unchanged
+        // Front matter keys only the package has (e.g. a day's weather, §15) are
+        // added; keys both sides have keep the local value.
+        val localFm = JournalCodec.frontMatterValues(local)
+        val missingFm = JournalCodec.frontMatterValues(incoming).filterKeys { it !in localFm }
+        if (added == 0 && updated == 0 && missingFm.isEmpty()) return Result.Unchanged
 
         // Stable sort by creation time; entries with no readable time keep
         // their relative position at the end.
@@ -63,7 +67,9 @@ object JournalMerge {
             compareBy<IndexedValue<Slot>>({ it.value.entry.at == null }, { it.value.entry.at?.toInstant() }, { it.index }),
         ).map { it.value }
 
-        val head = localDoc.head.ifBlank { inDoc.head }
+        val head = localDoc.head.ifBlank { inDoc.head }.let { h ->
+            if (missingFm.isEmpty()) h else JournalCodec.withFrontMatter(h, missingFm)
+        }
         val sb = StringBuilder(head.trimEnd('\n', '\r'))
         if (sb.isNotEmpty()) sb.append('\n')
         for (s in ordered) {

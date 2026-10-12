@@ -39,14 +39,30 @@ object TodayLocation {
             ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
         }
 
+    /**
+     * [T-today-weather] City-level position for the day's weather (SPEC §15.3):
+     * any provider's last known fix, however old — the weather only needs the
+     * city — and only without one a fresh fix like [fix].
+     */
+    suspend fun coarse(context: Context): Fix? {
+        if (!hasPermission(context)) return null
+        val lm = context.getSystemService(LocationManager::class.java) ?: return null
+        return lastKnown(lm).maxByOrNull { it.elapsedRealtimeNanos }?.toFix() ?: fix(context)
+    }
+
+    /** Every enabled provider's cached fix; no new request. */
+    @SuppressLint("MissingPermission")
+    private fun lastKnown(lm: LocationManager): List<Location> =
+        runCatching { lm.getProviders(true) }.getOrDefault(emptyList())
+            .mapNotNull { runCatching { lm.getLastKnownLocation(it) }.getOrNull() }
+
     @SuppressLint("MissingPermission")
     suspend fun fix(context: Context): Fix? {
         if (!hasPermission(context)) return null
         val lm = context.getSystemService(LocationManager::class.java) ?: return null
         val providers = runCatching { lm.getProviders(true) }.getOrDefault(emptyList())
         val now = System.currentTimeMillis()
-        val recent = providers
-            .mapNotNull { runCatching { lm.getLastKnownLocation(it) }.getOrNull() }
+        val recent = lastKnown(lm)
             .filter { now - it.time <= MAX_AGE_MS }
             .minByOrNull { it.accuracy }
         if (recent != null) return recent.toFix()

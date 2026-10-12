@@ -3,6 +3,8 @@ package com.openminis.app.tools
 import android.content.Context
 import com.openminis.app.data.model.AgentToolDefinition
 import com.openminis.app.data.model.AgentToolParam
+import com.openminis.app.data.journal.CheckIns
+import com.openminis.app.data.journal.Habit
 import com.openminis.app.data.journal.JournalEntry
 import com.openminis.app.data.journal.JournalStore
 import org.json.JSONObject
@@ -11,7 +13,6 @@ import java.time.LocalTime
 import java.time.OffsetDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
-import java.time.temporal.ChronoUnit
 
 /**
  * [T-today-tab] `journal` — the agent's way to read and write the user's
@@ -27,23 +28,31 @@ object JournalTool {
     const val NAME = "journal"
     private val HM = DateTimeFormatter.ofPattern("HH:mm")
 
+    /** "30/50 个" for counted habits, done / not done for tick-boxes. */
+    private fun progress(h: Habit, done: Int): String = h.progressText(done) ?: if (done > 0) "done" else "not done"
+
     fun definition(): AgentToolDefinition = AgentToolDefinition(
         name = NAME,
         description = "Read and write the user's Today journal (/var/minis/journal) — their own diary of short notes and photos. " +
             "Actions: list (entries of one day, with ids), add (a new entry), edit (replace an entry's text), delete (remove an entry). " +
             "Entries you add or edit are marked as written by Minis in the user's timeline. " +
             "Only write when the user asks you to, or clearly agrees; keep their voice and language, and never rewrite or delete their words on your own initiative. " +
-            "Use list first to get an entry's id before edit or delete.",
+            "Use list first to get an entry's id before edit or delete. " +
+            "Daily check-ins (habits such as '20 push-ups'): habits lists the user's check-in items and today's progress; " +
+            "check_in records progress for TODAY only (past days cannot be checked in). " +
+            "Check-in items themselves are defined by the user in the Today tab; you cannot create or change them.",
         parameters = mapOf(
             "tool_title" to AgentToolParam("string", "A concise 5-10 word summary of what this tool call does, shown to the user (e.g. 'Read today's journal', 'Log yesterday's movie night'). Use the same language as the user."),
-            "action" to AgentToolParam("string", "What to do.", enumValues = listOf("list", "add", "edit", "delete")),
+            "action" to AgentToolParam("string", "What to do.", enumValues = listOf("list", "add", "edit", "delete", "habits", "check_in")),
             "date" to AgentToolParam("string", "Local date YYYY-MM-DD. list: the day to read (default today). add: the day the entry belongs to (default today)."),
             "time" to AgentToolParam("string", "add only: local time HH:mm the entry is about (default now). Use it to backfill something that happened earlier."),
             "content" to AgentToolParam("string", "add/edit: the entry text, plain Markdown, written as the user would write it."),
             "id" to AgentToolParam("string", "edit/delete: the entry id from list."),
+            "habit" to AgentToolParam("string", "check_in: the habit id or exact name from habits."),
+            "count" to AgentToolParam("integer", "check_in: how much to ADD to today's total (negative to correct a mistake). Omit to mark the habit fully done for today."),
         ),
         required = listOf("tool_title", "action"),
-        propertyOrdering = listOf("tool_title", "action", "date", "time", "content", "id"),
+        propertyOrdering = listOf("tool_title", "action", "date", "time", "content", "id", "habit", "count"),
     )
 
     suspend fun execute(context: Context, argsJson: String): ToolExecutionResult =
@@ -57,7 +66,7 @@ object JournalTool {
         fun fail(msg: String) = ToolExecutionResult("Error: $msg", false, toolTitle = title)
         fun date(): LocalDate? = args.optString("date").takeIf { it.isNotBlank() }?.let {
             runCatching { LocalDate.parse(it.trim()) }.getOrNull() ?: return null
-        } ?: LocalDate.now(zone)
+        } ?: store.now().toLocalDate()
 
         return when (args.optString("action").trim().lowercase()) {
             "list" -> {
@@ -74,6 +83,7 @@ object JournalTool {
                         e.place?.let { append(" place=").append(it) }
                         if (e.photos.isNotEmpty()) append(" photos=").append(e.photos.joinToString(","))
                         if (e.writtenByMinis) append(" by=minis")
+                        CheckIns.habitId(e)?.let { append(" check_in habit=").append(it).append(" done=").append(CheckIns.done(e)) }
                         append("\n  ").append(e.body.replace("\n", "\n  "))
                     }
                 }
@@ -85,12 +95,12 @@ object JournalTool {
                 val day = date() ?: return fail("date must be YYYY-MM-DD")
                 val timeArg = args.optString("time").trim()
                 val time = if (timeArg.isEmpty()) {
-                    LocalTime.now(zone).truncatedTo(ChronoUnit.SECONDS)
+                    store.now().toLocalTime()
                 } else {
                     runCatching { LocalTime.parse(timeArg) }.getOrNull() ?: return fail("time must be HH:mm")
                 }
                 val at = OffsetDateTime.of(day, time, zone.rules.getOffset(day.atTime(time)))
-                if (at.isAfter(OffsetDateTime.now(zone).plusMinutes(5))) return fail("cannot add an entry in the future")
+                if (at.isAfter(store.now().plusMinutes(5))) return fail("cannot add an entry in the future")
                 val e = store.add(content, at = at, by = JournalEntry.BY_MINIS)
                 ToolExecutionResult("Added journal entry id=${e.id} on $day at ${HM.format(at)}.", true, toolTitle = title)
             }
@@ -98,7 +108,8 @@ object JournalTool {
                 val id = args.optString("id").trim().ifEmpty { return fail("id is required for edit") }
                 val content = args.optString("content").trim()
                 if (content.isEmpty()) return fail("content is required for edit")
-                val (day, _) = store.find(id) ?: return fail("no journal entry with id=$id")
+                val (day, found) = store.find(id) ?: return fail("no journal entry with id=$id")
+                if (CheckIns.isCheckIn(found)) return fail("entry id=$id is a check-in; use action check_in to change its count")
                 if (!store.editBody(day, id, content, by = JournalEntry.BY_MINIS)) {
                     return fail("entry id=$id could not be edited (its id may appear twice in the file)")
                 }
@@ -110,7 +121,48 @@ object JournalTool {
                 if (!store.delete(day, id)) return fail("entry id=$id could not be deleted")
                 ToolExecutionResult("Deleted journal entry id=$id from $day. Photos stay in the photo library.", true, toolTitle = title)
             }
-            else -> fail("action must be one of list, add, edit, delete")
+            "habits" -> {
+                val today = store.now().toLocalDate()
+                val habits = store.readHabits().filter { !it.archived }
+                if (habits.isEmpty()) {
+                    return ToolExecutionResult("The user has no check-in items. They can add them in the Today tab (⋯ → Daily check-ins).", true, toolTitle = title)
+                }
+                val totals = CheckIns.totals(store.readDay(today)?.entries.orEmpty())
+                val out = buildString {
+                    append("Check-in items (today is $today, ${today.dayOfWeek.name.lowercase()}):\n")
+                    for (h in habits) {
+                        append("\n- id=").append(h.id).append(" name=").append(h.name)
+                        h.target?.let { append(" target=").append(it) }
+                        h.unit?.let { append(" unit=").append(it) }
+                        h.days?.let { d -> append(" days=").append(Habit.daysAttr(d)) }
+                        if (!h.dueOn(today)) append(" (not due today)")
+                        val done = totals[h.id] ?: 0
+                        append(" today=").append(progress(h, done))
+                    }
+                }
+                ToolExecutionResult(out, true, toolTitle = title)
+            }
+            "check_in" -> {
+                val key = args.optString("habit").trim().ifEmpty { return fail("habit is required for check_in") }
+                if (args.optString("date").isNotBlank() && date() != store.now().toLocalDate()) {
+                    return fail("check-ins can only be recorded for today; past days cannot be filled in")
+                }
+                val habits = store.readHabits().filter { !it.archived }
+                val habit = habits.firstOrNull { it.id == key } ?: habits.firstOrNull { it.name.equals(key, ignoreCase = true) }
+                    ?: return fail("no check-in item '$key'; use action habits to see the ids")
+                val today = store.now().toLocalDate()
+                val before = CheckIns.totals(store.readDay(today)?.entries.orEmpty())[habit.id] ?: 0
+                val after = if (args.has("count") && !args.isNull("count")) {
+                    val n = args.optInt("count", Int.MIN_VALUE)
+                    if (n == Int.MIN_VALUE) return fail("count must be an integer")
+                    if (habit.target == null && n > 0) 1 else (before + n).coerceAtLeast(0)
+                } else {
+                    maxOf(before, habit.goal)
+                }
+                store.setCheckIn(today, habit, after, by = JournalEntry.BY_MINIS)
+                ToolExecutionResult("Checked in ${habit.name} for $today: ${progress(habit, after)}.", true, toolTitle = title)
+            }
+            else -> fail("action must be one of list, add, edit, delete, habits, check_in")
         }
     }
 }

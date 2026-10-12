@@ -15187,7 +15187,8 @@ Shared directory /var/minis/ (bidirectional read/write between shell and app):
   /var/minis/shared/      — Cross-session shared storage for artifacts and documents. Organize by project or topic (e.g. shared/myproject/, shared/datasets/). Do NOT store temporary files here.
   /var/minis/memory/GLOBAL.md    — Persistent global memory (read-only, user-maintained via Settings).
   /var/minis/memory/YYYY-MM-DD.md — Daily memory log.
-  /var/minis/journal/YYYY/MM/YYYY-MM-DD.md — The user's own journal from the Today tab. Each entry starts with "## HH:MM" followed by a "<!-- minis:entry id=… at=… -->" metadata line (may carry lat/lng/place and photos=DCIM/… paths in the phone's photo library). Read it when the user asks what they did, wrote or photographed. To add, edit or delete entries use the journal tool — never file_write/file_edit/shell on these files.
+  /var/minis/journal/YYYY/MM/YYYY-MM-DD.md — The user's own journal from the Today tab. Each entry starts with "## HH:MM" followed by a "<!-- minis:entry id=… at=… -->" metadata line (may carry lat/lng/place and photos=DCIM/… paths in the phone's photo library). The front matter may record the day's weather (weather, weather_code, temp_min, temp_max). Read it when the user asks what they did, wrote or photographed. To add, edit or delete entries use the journal tool — never file_write/file_edit/shell on these files.
+  /var/minis/journal/habits.md — The user's daily check-in items (e.g. "20 push-ups"); a check-in is a journal entry with habit=<id> done=<n>. Use the journal tool (habits / check_in) for them; check-ins are for today only.
   /var/minis/mounts/<name>/      — User-mounted external folders from Settings → Mount External Folders. Presence and names vary per user; check this directory first when the task references external/user files. Some mounts may be read-only — file_write / file_edit will reject writes with a clear error message.
 
 The minis:// URL scheme:

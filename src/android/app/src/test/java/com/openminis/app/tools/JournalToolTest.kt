@@ -85,3 +85,50 @@ class JournalToolTest {
         assertTrue(call(s, "action" to "list", "date" to "2026-01-01").output.startsWith("No journal entries"))
     }
 }
+
+/** [T-today-habits] journal tool check-ins (SPEC §14.4). */
+class JournalToolHabitsTest {
+    @get:Rule val tmp = TemporaryFolder()
+    private val zone = ZoneId.of("Asia/Shanghai")
+    private val now = OffsetDateTime.of(2026, 10, 12, 20, 0, 0, 0, ZoneOffset.ofHours(8))
+    private val today = now.toLocalDate()
+    private fun store() = JournalStore(tmp.root, { zone }, { now })
+    private fun call(s: JournalStore, vararg kv: Pair<String, Any>) = runBlocking {
+        val o = JSONObject().put("tool_title", "t")
+        kv.forEach { (k, v) -> o.put(k, v) }
+        JournalTool.execute(s, o.toString(), zone)
+    }
+
+    @Test
+    fun checkInByNameAccumulatesForToday() = runBlocking {
+        val s = store()
+        val h = s.addHabit("深蹲", 50, "个", null)
+        assertTrue(call(s, "action" to "check_in", "habit" to "深蹲", "count" to 30).success)
+        val r = call(s, "action" to "check_in", "habit" to h.id!!, "count" to 30)
+        assertTrue(r.output, r.output.contains("60/50"))
+        val e = s.readDay(today)!!.entries.single()
+        assertEquals("60", e.attrs["done"])
+        assertTrue(e.writtenByMinis)
+        assertTrue(call(s, "action" to "habits").output.contains("today=60/50"))
+    }
+
+    @Test
+    fun noCheckInWithoutCountCompletes() = runBlocking {
+        val s = store()
+        s.addHabit("冥想", null, null, null)
+        assertTrue(call(s, "action" to "check_in", "habit" to "冥想").output.contains("done"))
+        assertEquals(1, s.readDay(today)!!.entries.single().let(com.openminis.app.data.journal.CheckIns::done))
+    }
+
+    @Test
+    fun pastDaysAndEditsAreRefused() = runBlocking {
+        val s = store()
+        s.addHabit("俯卧撑", 20, "个", null)
+        val past = call(s, "action" to "check_in", "habit" to "俯卧撑", "date" to today.minusDays(1).toString())
+        assertFalse(past.success)
+        assertTrue(s.readDay(today.minusDays(1)) == null)
+        call(s, "action" to "check_in", "habit" to "俯卧撑")
+        val id = s.readDay(today)!!.entries.single().id!!
+        assertFalse(call(s, "action" to "edit", "id" to id, "content" to "x").success)
+    }
+}

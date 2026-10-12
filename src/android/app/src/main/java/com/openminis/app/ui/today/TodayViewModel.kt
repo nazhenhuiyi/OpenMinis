@@ -8,9 +8,14 @@ import android.provider.MediaStore
 import androidx.exifinterface.media.ExifInterface
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.openminis.app.data.journal.CheckIns
+import com.openminis.app.data.journal.Habit
+import com.openminis.app.data.journal.HabitProgress
 import com.openminis.app.data.journal.JournalEntry
 import com.openminis.app.data.journal.JournalStore
+import com.openminis.app.data.journal.DayWeather
 import com.openminis.app.data.journal.TodayLocation
+import com.openminis.app.data.journal.TodayWeather
 import com.openminis.app.data.photos.CameraPhoto
 import com.openminis.app.data.photos.CameraRollRules
 import com.openminis.app.data.photos.CameraRollSource
@@ -53,7 +58,18 @@ sealed interface TodayRow {
     data class Group(val group: TodayGroup) : TodayRow { override val key get() = "g:" + group.photos.first().id }
 }
 
-data class TodayDay(val date: LocalDate, val rows: List<TodayRow>)
+data class TodayDay(
+    val date: LocalDate,
+    val rows: List<TodayRow>,
+    /**
+     * Read-only check-ins shown at the top of the day (§14.3): a past day's, or
+     * today's whose habit is gone from habits.md. Today's live ones are
+     * [TodayUiState.todayHabits] — one copy, so the optimistic update touches one list.
+     */
+    val checkIns: List<HabitProgress> = emptyList(),
+    /** Recorded in the day file's front matter (§15); null = none recorded. */
+    val weather: DayWeather? = null,
+)
 
 /** A photo just taken in the composer, waiting to be sent (SPEC §2.3). */
 data class PendingPhoto(val uri: String, val relativePath: String)
@@ -69,6 +85,11 @@ data class TodayUiState(
     val includedAlbums: Set<String> = emptySet(),
     val hasOlder: Boolean = false,
     val today: LocalDate = LocalDate.now(),
+    /** All habits in file order, archived ones included (§14.2). */
+    val habits: List<Habit> = emptyList(),
+    val showWeather: Boolean = true,
+    /** Today's check-ins (top-bar chip + sheet): habits due today, plus any already checked in today (even if deleted since). */
+    val todayHabits: List<HabitProgress> = emptyList(),
 )
 
 /**
@@ -89,6 +110,7 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
             pending = loadPending(),
             recordLocation = prefs.getBoolean(KEY_RECORD_LOCATION, true),
             includedAlbums = prefs.getStringSet(KEY_ALBUMS, emptySet()).orEmpty(),
+            showWeather = prefs.getBoolean(KEY_SHOW_WEATHER, true),
         ),
     )
     val state: StateFlow<TodayUiState> = _state.asStateFlow()
@@ -100,6 +122,7 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
     sealed interface Event {
         data class Toast(val res: Int) : Event
         data object NeedLocationPermission : Event
+        data object AllHabitsDone : Event
     }
     private val events = Channel<Event>(Channel.BUFFERED)
     val eventFlow = events.receiveAsFlow()
@@ -126,6 +149,12 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
 
     fun reload() { reloadRequests.value++ }
 
+    /** Opening or returning to Today: reread everything, and refresh today's weather if due (§15.3). */
+    fun onResumed() {
+        reload()
+        refreshWeather()
+    }
+
     fun loadOlder() {
         if (!_state.value.hasOlder || loadJob?.isActive == true) return
         windowDays += OLDER_STEP_DAYS
@@ -142,12 +171,18 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
             val access = roll.access()
             val included = _state.value.includedAlbums
 
-            // Notes.
+            // Notes; check-ins are pulled out into one block per day (§14.3).
+            val habits = store.readHabits()
             val notes = ArrayList<TodayNote>()
+            val checkInsByDay = HashMap<LocalDate, List<JournalEntry>>()
+            val weatherByDay = HashMap<LocalDate, DayWeather>()
             for (d in dates) {
                 val doc = store.readDay(d) ?: continue
+                DayWeather.from(doc.frontMatter)?.let { weatherByDay[d] = it }
                 val idCounts = doc.entries.groupingBy { it.id }.eachCount()
-                for (e in doc.entries) {
+                val (checkIns, plain) = doc.entries.partition(CheckIns::isCheckIn)
+                if (checkIns.isNotEmpty()) checkInsByDay[d] = checkIns
+                for (e in plain) {
                     val atMs = e.at?.toInstant()?.toEpochMilli()
                         ?: d.atStartOfDay(zone).toInstant().toEpochMilli()
                     notes += TodayNote(e, d, atMs, emptyList(), editable = e.id != null && idCounts[e.id] == 1)
@@ -172,6 +207,13 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
             val items = PhotoGrouper.build(resolvedNotes, { it.atMs }, photos, zone)
             val showPlaces = _state.value.recordLocation
             val byDay = items.groupBy { java.time.Instant.ofEpochMilli(it.atMs).atZone(zone).toLocalDate() }
+            val todayTotals = CheckIns.totals(checkInsByDay[today].orEmpty())
+            // Due today, or already checked in today — even if deleted since: today's record still counts.
+            val todayHabits = habits.filter { h -> h.dueOn(today) || h.id in todayTotals }
+                .map { h -> HabitProgress(h, todayTotals[h.id] ?: 0) }
+            val live = todayHabits.mapNotNull { it.habit.id }.toSet()
+            val order = habits.mapIndexedNotNull { i, h -> h.id?.let { it to i } }.toMap()
+            val byId = habits.filter { it.id != null }.associateBy { it.id!! }
             val days = dates.mapNotNull { d ->
                 val rows = byDay[d].orEmpty().map { item ->
                     when (item) {
@@ -180,11 +222,16 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
                         is TimelineItem.PhotoGroup -> TodayRow.Group(TodayGroup(item.photos, if (showPlaces) groupPlaces[item.photos.first().id] else null))
                     }
                 }
-                if (rows.isEmpty() && d != today) null else TodayDay(d, rows)
+                val entries = checkInsByDay[d].orEmpty().let { es -> if (d == today) es.filter { CheckIns.habitId(it) !in live } else es }
+                val block = readOnlyCheckIns(entries, byId, order)
+                if (rows.isEmpty() && block.isEmpty() && d != today) null else TodayDay(d, rows, block, weatherByDay[d])
             }
             val hasOlder = store.availableDays().any { it < start } || windowDays < MAX_WINDOW_DAYS
             _state.update {
-                it.copy(loaded = true, days = days, access = access, hasOlder = hasOlder, today = today)
+                it.copy(
+                    loaded = true, days = days, access = access, hasOlder = hasOlder, today = today,
+                    habits = habits, todayHabits = todayHabits,
+                )
             }
             if (showPlaces) resolvePlaces(days)
         }
@@ -236,24 +283,39 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
             val date = entry.at!!.toLocalDate()
             if (_state.value.recordLocation) {
                 if (TodayLocation.hasPermission(context)) locate(date, entry.id!!)
-                else if (!prefs.getBoolean(KEY_LOCATION_ASKED, false)) {
-                    awaitingLocation = date to entry.id!!
-                    events.send(Event.NeedLocationPermission)
-                }
+                else if (askLocationOnce()) awaitingLocation = date to entry.id!!
             }
         }
     }
 
-    /** Result of the location permission prompt raised by [send]. */
-    fun onLocationPermissionResult(granted: Boolean) {
+    /**
+     * Notes (§6.1) and weather (§15.3) share one location prompt, asked once
+     * ever: the flag is written when the request goes out, so nothing can
+     * stack a second prompt while the first is on screen. False = already asked.
+     */
+    private fun askLocationOnce(): Boolean {
+        if (prefs.getBoolean(KEY_LOCATION_ASKED, false)) return false
         prefs.edit().putBoolean(KEY_LOCATION_ASKED, true).apply()
-        val target = awaitingLocation
-        awaitingLocation = null
+        events.trySend(Event.NeedLocationPermission)
+        return true
+    }
+
+    /** Result of the shared location prompt; each asker gets its answer. */
+    fun onLocationPermissionResult(granted: Boolean) {
+        val note = awaitingLocation.also { awaitingLocation = null }
+        val weather = awaitingWeather.also { awaitingWeather = false }
         if (granted) {
-            target?.let { (d, id) -> locate(d, id) }
-        } else {
+            note?.let { (d, id) -> locate(d, id) }
+            if (weather) refreshWeather(force = true)
+            return
+        }
+        if (note != null) {
             setRecordLocation(false)
             events.trySend(Event.Toast(com.openminis.app.R.string.today_location_off_toast))
+        }
+        if (weather) {
+            setShowWeather(false)
+            events.trySend(Event.Toast(com.openminis.app.R.string.today_weather_off_toast))
         }
     }
 
@@ -309,6 +371,98 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
         val id = note.entry.id ?: return
         viewModelScope.launch { store.delete(note.date, id) }
     }
+
+    // ── Weather (SPEC §15) ───────────────────────────────────────────────
+
+    private var weatherJob: Job? = null
+    private var lastWeatherAttemptMs = 0L
+    private var awaitingWeather = false
+
+    /**
+     * Today's weather goes into today's front matter (§15.3), on open/resume
+     * only — not on every reload. Fetched when missing or older than
+     * [TodayWeather.REFRESH_MS]; past days are never refetched; a failure is
+     * retried at most every [WEATHER_RETRY_MS] unless [force]d.
+     */
+    private fun refreshWeather(force: Boolean = false) {
+        if (!_state.value.showWeather || weatherJob?.isActive == true) return
+        if (!TodayLocation.hasPermission(context)) {
+            if (askLocationOnce()) awaitingWeather = true
+            return
+        }
+        val nowMs = store.now().toInstant().toEpochMilli()
+        if (!force && nowMs - lastWeatherAttemptMs < WEATHER_RETRY_MS) return
+        weatherJob = viewModelScope.launch {
+            val today = store.now().toLocalDate()
+            val updated = store.readDay(today)?.let { DayWeather.from(it.frontMatter) }?.updated
+            if (updated != null && nowMs - updated.toInstant().toEpochMilli() < TodayWeather.REFRESH_MS) return@launch
+            lastWeatherAttemptMs = nowMs
+            val fix = TodayLocation.coarse(context) ?: return@launch
+            val w = TodayWeather.fetch(fix.lat, fix.lng, store.now()) ?: return@launch
+            store.setFrontMatter(today, w.frontMatter(context.getString(TodayWeather.label(w.code))))
+        }
+    }
+
+    fun setShowWeather(on: Boolean) {
+        prefs.edit().putBoolean(KEY_SHOW_WEATHER, on).apply()
+        _state.update { it.copy(showWeather = on) }
+        if (!on) return
+        if (TodayLocation.hasPermission(context)) refreshWeather(force = true)
+        else {
+            // Turned on by hand: ask even if asked before (the system may still refuse silently).
+            awaitingWeather = true
+            events.trySend(Event.NeedLocationPermission)
+        }
+    }
+
+    // ── Daily check-ins (SPEC §14) ────────────────────────────────────────
+
+    /** Tap on an open habit: fill it to its goal. Done ones go to the adjust panel instead (§14.3). */
+    fun completeHabit(habitId: String) {
+        val p = _state.value.todayHabits.firstOrNull { it.habit.id == habitId } ?: return
+        if (!p.complete) setHabitDone(p.habit, p.habit.goal)
+    }
+
+    /** Set today's total (adjust panel), 0 = undo. Always today — no backfilling (§14.1). */
+    fun setHabitDone(habit: Habit, total: Int) {
+        // Optimistic: the ring moves on the tap, not after the file round-trip;
+        // the reload that follows the write confirms it.
+        val n = total.coerceAtLeast(0)
+        val before = _state.value.todayHabits
+        val after = before.map { p -> if (p.habit.id == habit.id) p.copy(done = n) else p }
+        _state.update { it.copy(todayHabits = after) }
+        if (!allDone(before) && allDone(after)) events.trySend(Event.AllHabitsDone)
+        viewModelScope.launch { store.setCheckIn(store.now().toLocalDate(), habit, n) }
+    }
+
+    private fun allDone(list: List<HabitProgress>) = list.isNotEmpty() && list.all { it.complete }
+
+    fun addHabit(name: String, target: Int?, unit: String?, days: Set<java.time.DayOfWeek>?) {
+        viewModelScope.launch { store.addHabit(name, target, unit, days) }
+    }
+
+    fun updateHabit(habit: Habit, name: String, target: Int?, unit: String?, days: Set<java.time.DayOfWeek>?) {
+        val id = habit.id ?: return
+        viewModelScope.launch { store.updateHabit(id) { it.withDefinition(name, target, unit, days) } }
+    }
+
+    /** Delete = archive; the line stays so past check-ins keep their name (§14.2). */
+    fun archiveHabit(habit: Habit) {
+        val id = habit.id ?: return
+        viewModelScope.launch {
+            store.updateHabit(id) { it.withAttrs(mapOf(Habit.KEY_ARCHIVED to store.now().toLocalDate().toString())) }
+        }
+    }
+
+    /** A day's check-ins, one per habit with the day's total, in habits.md order; read-only. */
+    private fun readOnlyCheckIns(entries: List<JournalEntry>, byId: Map<String, Habit>, order: Map<String, Int>): List<HabitProgress> =
+        entries.groupBy { CheckIns.habitId(it)!! }
+            .entries.sortedBy { order[it.key] ?: Int.MAX_VALUE }
+            .map { (id, es) ->
+                // Unknown id (habits.md edited by hand): a stand-in named from the entry's own words.
+                val h = byId[id] ?: Habit(es.first().body.removePrefix("✅ ").substringBefore(' '), linkedMapOf(Habit.KEY_ID to id))
+                HabitProgress(h, es.sumOf(CheckIns::done), editable = false)
+            }
 
     // ── Settings (⋯ menu) ─────────────────────────────────────────────────
 
@@ -395,6 +549,8 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
         private const val KEY_RECORD_LOCATION = "recordLocation"
         private const val KEY_LOCATION_ASKED = "locationAsked"
         private const val KEY_ALBUMS = "includedAlbums"
+        private const val KEY_SHOW_WEATHER = "showWeather"
+        private const val WEATHER_RETRY_MS = 10 * 60 * 1000L
         private const val INITIAL_DAYS = 7
         private const val OLDER_STEP_DAYS = 7
         private const val MAX_WINDOW_DAYS = 90
