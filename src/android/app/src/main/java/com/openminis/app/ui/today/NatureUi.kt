@@ -53,6 +53,8 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.flow.first
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -231,7 +233,9 @@ internal fun SpeciesSuggestionChip(photo: CameraPhoto, count: Int, s: SpeciesSug
 /**
  * The photo large, a light sweeping over it while the model looks; then the
  * candidates as cards with a confidence bar. Several photos → a strip to pick
- * which one. None right → ask Minis with the photo.
+ * which one, looked at in the background so flipping is instant, a dot on
+ * those that look alive. None right → ask Minis with the photo. [rejected]
+ * is a kind the user just said no to: not offered again here.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -240,12 +244,14 @@ internal fun IdentifySheet(
     photos: List<CameraPhoto>,
     start: CameraPhoto?,
     tags: Map<String, com.openminis.app.data.species.PhotoTag>,
+    rejected: String? = null,
+    onUndoReject: (() -> Unit)? = null,
     onPick: (CameraPhoto, SpeciesSuggestion) -> Unit,
     onUntag: (CameraPhoto) -> Unit,
     onAsk: (CameraPhoto) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    var current by remember { mutableStateOf(start) }
+    var current by remember { mutableStateOf(start ?: vm.startPhoto(photos)) }
     val results = remember { mutableStateMapOf<String, SpeciesId.Result?>() }
     // A box the user drew on the current photo; its result replaces the automatic one.
     var drawn by remember { mutableStateOf<SpeciesId.Region?>(null) }
@@ -260,11 +266,17 @@ internal fun IdentifySheet(
             recorded = tags[openedFor.relativePath],
             onAdd = { onPick(openedFor, opened!!); opened = null },
             onRemove = { onUntag(openedFor); opened = null },
+            // Back to the other candidates.
+            onNot = { opened = null },
             onOthers = null,
             onDismiss = { opened = null },
         )
     }
-    LaunchedEffect(Unit) { if (current == null) current = vm.bestPhoto(photos) }
+    // The rest of the strip, one at a time once the photo on screen has its answer.
+    LaunchedEffect(Unit) {
+        snapshotFlow { current?.let { results.containsKey(it.relativePath) } ?: true }.first { it }
+        for (ph in photos.take(PREFETCH)) if (!results.containsKey(ph.relativePath)) results[ph.relativePath] = vm.identify(ph)
+    }
     LaunchedEffect(current) {
         drawn = null
         val p = current ?: return@LaunchedEffect
@@ -278,6 +290,12 @@ internal fun IdentifySheet(
     }
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(bottom = 24.dp).testTag("today_identify_sheet")) {
+            if (onUndoReject != null) {
+                Row(Modifier.fillMaxWidth().padding(bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(stringResource(R.string.today_species_dismissed), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+                    TextButton(onClick = onUndoReject, modifier = Modifier.testTag("today_identify_undo")) { Text(stringResource(R.string.today_undo)) }
+                }
+            }
             val p = current
             RegionPhoto(
                 photo = p,
@@ -295,14 +313,22 @@ internal fun IdentifySheet(
                 LazyRow(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(photos, key = { it.id }) { ph ->
                         val sel = ph.id == p?.id
-                        PhotoImage(
-                            ph,
-                            Modifier.size(52.dp).clip(RoundedCornerShape(10.dp))
-                                .border(if (sel) 2.dp else 0.dp, if (sel) Leaf else Color.Transparent, RoundedCornerShape(10.dp))
-                                .graphicsLayer { alpha = if (sel) 1f else 0.6f }
-                                .clickable { current = ph },
-                            size = 200,
-                        )
+                        Box {
+                            PhotoImage(
+                                ph,
+                                Modifier.size(52.dp).clip(RoundedCornerShape(10.dp))
+                                    .border(if (sel) 2.dp else 0.dp, if (sel) Leaf else Color.Transparent, RoundedCornerShape(10.dp))
+                                    .graphicsLayer { alpha = if (sel) 1f else 0.6f }
+                                    .clickable { current = ph },
+                                size = 200,
+                            )
+                            if (results[ph.relativePath]?.looksLikeOrganism == true) {
+                                Box(
+                                    Modifier.align(Alignment.TopEnd).padding(4.dp).size(10.dp).clip(CircleShape)
+                                        .background(Leaf).border(1.5.dp, Color.White, CircleShape),
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -314,7 +340,7 @@ internal fun IdentifySheet(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(vertical = 12.dp),
                 )
-                r == null || r.top.isEmpty() -> Text(stringResource(R.string.today_identify_none), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                r == null || r.top.none { it.latin != rejected } -> Text(stringResource(R.string.today_identify_none), color = MaterialTheme.colorScheme.onSurfaceVariant)
                 else -> {
                     Text(
                         stringResource(if (r.looksLikeOrganism) R.string.today_identify_title else R.string.today_identify_not_life),
@@ -322,7 +348,9 @@ internal fun IdentifySheet(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Spacer(Modifier.height(8.dp))
-                    r.top.forEachIndexed { i, g -> CandidateCard(vm, g, first = i == 0 && r.looksLikeOrganism, onClick = { opened = SpeciesSuggestion.of(g, r.region) }) }
+                    r.top.filter { it.latin != rejected }.forEachIndexed { i, g ->
+                        CandidateCard(vm, g, first = i == 0 && r.looksLikeOrganism, onClick = { opened = SpeciesSuggestion.of(g, r.region) })
+                    }
                 }
             }
             // Already recorded: say so, and let a wrong one be taken off.
@@ -355,6 +383,9 @@ internal fun IdentifySheet(
         }
     }
 }
+
+/** Photos of a group looked at ahead in the identify sheet; the NPU takes about a second each. */
+private const val PREFETCH = 12
 
 /**
  * The whole photo (not cropped, so a box means the same on screen and to the
@@ -537,8 +568,8 @@ private fun RefPhotosDialog(refs: List<SpeciesInfo.RefPhoto>, name: String, lati
  * before adding anything: their own part of the photo beside reference
  * photos, the name, how sure, a short introduction — and only then one
  * clear button to add it. [photos] are the ones it was suggested for (a
- * group's photos of the same kind are added together). [onOthers], when
- * given, leads to the other candidates.
+ * group's photos of the same kind are added together). [onNot] is "not
+ * it"; [onOthers], when given, leads to the other candidates.
  */
 @Composable
 internal fun WhatIsItPage(
@@ -548,6 +579,7 @@ internal fun WhatIsItPage(
     recorded: com.openminis.app.data.species.PhotoTag?,
     onAdd: () -> Unit,
     onRemove: () -> Unit,
+    onNot: () -> Unit,
     onOthers: (() -> Unit)?,
     onDismiss: () -> Unit,
 ) {
@@ -655,7 +687,7 @@ internal fun WhatIsItPage(
                                 Text(stringResource(R.string.today_whatis_remove), color = MaterialTheme.colorScheme.error)
                             }
                         } else {
-                            androidx.compose.material3.OutlinedButton(onClick = onDismiss, modifier = Modifier.height(52.dp)) {
+                            androidx.compose.material3.OutlinedButton(onClick = onNot, modifier = Modifier.height(52.dp).testTag("today_whatis_not")) {
                                 Text(stringResource(R.string.today_whatis_not))
                             }
                             Spacer(Modifier.width(12.dp))

@@ -2157,6 +2157,9 @@
         <item quantity="other">%d 張</item>
     </plurals>
     <string name="today_species_not">不是</string>
+    <string name="today_undo">復原</string>
+    <string name="today_species_dismissed">已略過這個推薦</string>
+    <string name="today_species_removed">已移出圖鑑</string>
     <string name="today_species_genus">%s的一種</string>
     <string name="today_species_genus_latin">%s 屬的一種</string>
     <string name="today_menu_identify">認一認</string>

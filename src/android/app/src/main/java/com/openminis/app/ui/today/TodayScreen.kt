@@ -65,6 +65,10 @@ import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -118,6 +122,9 @@ import java.util.Locale
 
 /** A timeline suggestion opened on its "What is it?" page: the photos it covers, the guess, and the whole group. */
 private class WhatIs(val photos: List<CameraPhoto>, val suggestion: SpeciesSuggestion, val group: List<CameraPhoto>)
+
+/** "Identify" (§17.3) on [photos], starting on [start] (null = where it suggests), without [rejected] — [undo] takes that no back. */
+private class Identify(val photos: List<CameraPhoto>, val start: CameraPhoto?, val rejected: String? = null, val undo: (() -> Unit)? = null)
 
 /** What a long-press acted on: a note, or a photo group. */
 private sealed interface Target {
@@ -250,10 +257,21 @@ fun TodayScreen(
     // "What is it?" for a suggestion on the timeline (§17.3): its photos, the guess, and the group for "other possibilities".
     var whatIs by remember { mutableStateOf<WhatIs?>(null) }
     // "Identify" (§17.3): which photos, and which one to start on (null = the best-looking).
-    var identifying by remember { mutableStateOf<Pair<List<CameraPhoto>, CameraPhoto?>?>(null) }
+    var identifying by remember { mutableStateOf<Identify?>(null) }
     // Nature collection (§17.4): open, and optionally straight onto one species.
     var nature by remember { mutableStateOf<String?>(null) }
     var showNature by remember { mutableStateOf(false) }
+    // "Not this" and "remove" happen at once, with a moment to take them back.
+    val snackbar = remember { SnackbarHostState() }
+    val undoLabel = stringResource(R.string.today_undo)
+    val dismissedText = stringResource(R.string.today_species_dismissed)
+    val removedText = stringResource(R.string.today_species_removed)
+    val offerUndo: (String, () -> Unit) -> Unit = { text, undo ->
+        scope.launch {
+            snackbar.currentSnackbarData?.dismiss()
+            if (snackbar.showSnackbar(text, actionLabel = undoLabel, duration = SnackbarDuration.Short) == SnackbarResult.ActionPerformed) undo()
+        }
+    }
 
     LaunchedEffect(state.speciesReady) { if (state.speciesReady) vm.warmUpSpecies() }
 
@@ -351,7 +369,7 @@ fun TodayScreen(
                                                     count = photos.size,
                                                     s = sug,
                                                     onOpen = { whatIs = WhatIs(photos, sug, row.group.photos) },
-                                                    onDismiss = { photos.forEach(vm::dismissSuggestion) },
+                                                    onDismiss = { offerUndo(dismissedText, vm.dismissSuggestions(photos)) },
                                                 )
                                             }
                                         }
@@ -390,6 +408,7 @@ fun TodayScreen(
             onGone = { collected = null },
             modifier = Modifier.align(Alignment.BottomCenter).imePadding().padding(bottom = 112.dp),
         )
+        SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).imePadding().padding(bottom = 104.dp))
       }
     }
 
@@ -410,8 +429,8 @@ fun TodayScreen(
                 SheetItem(Icons.Outlined.Eco, stringResource(R.string.today_menu_identify)) {
                     close()
                     identifying = when (target) {
-                        is Target.Note -> target.note.photos.mapNotNull { it.second } to null
-                        is Target.Group -> target.group.photos to null
+                        is Target.Note -> Identify(target.note.photos.mapNotNull { it.second }, null)
+                        is Target.Group -> Identify(target.group.photos, null)
                     }
                 }
             }
@@ -471,21 +490,23 @@ fun TodayScreen(
         PhotoViewer(
             photos, start, zone,
             onDismiss = { viewer = null },
-            onIdentify = if (state.speciesReady) { p -> viewer = null; identifying = photos to p } else null,
+            onIdentify = if (state.speciesReady) { p -> viewer = null; identifying = Identify(photos, p) } else null,
             tags = state.tags,
             onTag = { latin -> viewer = null; nature = latin; showNature = true },
         )
     }
 
-    identifying?.let { (photos, start) ->
+    identifying?.let { id ->
         val askText = stringResource(R.string.today_identify_ask_text)
         IdentifySheet(
             vm = vm,
-            photos = photos,
-            start = start,
+            photos = id.photos,
+            start = id.start,
             tags = state.tags,
+            rejected = id.rejected,
+            onUndoReject = id.undo?.let { undo -> { undo(); identifying = null } },
             onPick = { photo, sug -> vm.record(listOf(photo), sug); identifying = null },
-            onUntag = { photo -> vm.untag(photo); identifying = null },
+            onUntag = { photo -> identifying = null; vm.untag(photo)?.let { offerUndo(removedText, it) } },
             onAsk = { photo -> identifying = null; onAskMinis(askText, listOf(photo.uri)) },
             onDismiss = { identifying = null },
         )
@@ -498,8 +519,13 @@ fun TodayScreen(
             s = w.suggestion,
             recorded = state.tags[w.photos.first().relativePath],
             onAdd = { vm.record(w.photos, w.suggestion); whatIs = null },
-            onRemove = { vm.untag(w.photos.first()); whatIs = null },
-            onOthers = { whatIs = null; identifying = w.group to w.photos.first() },
+            onRemove = { whatIs = null; vm.untag(w.photos.first())?.let { offerUndo(removedText, it) } },
+            // A real no: the suggestion goes, and the other candidates come up (with the undo, above the sheet).
+            onNot = {
+                whatIs = null
+                identifying = Identify(w.group, w.photos.first(), rejected = w.suggestion.latin, undo = vm.dismissSuggestions(w.photos))
+            },
+            onOthers = { whatIs = null; identifying = Identify(w.group, w.photos.first()) },
             onDismiss = { whatIs = null },
         )
     }

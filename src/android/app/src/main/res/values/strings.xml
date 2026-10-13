@@ -2361,6 +2361,9 @@
         <item quantity="other">%d photos</item>
     </plurals>
     <string name="today_species_not">Not this</string>
+    <string name="today_undo">Undo</string>
+    <string name="today_species_dismissed">Suggestion hidden</string>
+    <string name="today_species_removed">Removed from your collection</string>
     <string name="today_species_genus">a kind of %s</string>
     <string name="today_species_genus_latin">a kind of %s</string>
     <string name="today_menu_identify">Identify</string>

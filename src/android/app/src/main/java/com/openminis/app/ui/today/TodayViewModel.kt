@@ -393,17 +393,9 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
     suspend fun identify(photo: CameraPhoto, region: SpeciesId.Region): SpeciesId.Result? =
         SpeciesId.identify(context, Uri.parse(photo.uri), k = 3, region = region, takenAtMs = photo.takenAtMs)
 
-    /** Of [photos], the one that looks most like a living thing — where "Identify" opens (§17.3). */
-    suspend fun bestPhoto(photos: List<CameraPhoto>): CameraPhoto? {
-        val known = photos.firstOrNull { it.relativePath in _state.value.suggestions }
-        if (known != null) return known
-        var best: Pair<CameraPhoto, Float>? = null
-        for (p in photos.take(BEST_PHOTO_LOOKS)) {
-            val r = identify(p) ?: continue
-            if (best == null || r.match > best.second) best = p to r.match
-        }
-        return best?.first ?: photos.firstOrNull()
-    }
+    /** Where "Identify" opens on [photos] (§17.3): one already suggested, else the first — shown at once, never after a search. */
+    fun startPhoto(photos: List<CameraPhoto>): CameraPhoto? =
+        photos.firstOrNull { it.relativePath in _state.value.suggestions } ?: photos.firstOrNull()
 
     /**
      * Record [s] for [photos] (§17.2, §17.3): a tag on each photo, written to
@@ -425,13 +417,21 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Take a photo's tag off (wrong guess). It is not suggested or tagged again. */
-    fun untag(photo: CameraPhoto) {
-        val old = _state.value.tags[photo.relativePath] ?: return
-        _state.update { it.copy(tags = it.tags - photo.relativePath) }
-        speciesCache.edit().putString(photo.relativePath, USER_NO).apply()
+    /** Take a photo's tag off (wrong guess). It is not suggested or tagged again. Returns how to undo it. */
+    fun untag(photo: CameraPhoto): (() -> Unit)? {
+        val path = photo.relativePath
+        val old = _state.value.tags[path] ?: return null
+        val verdict = speciesCache.getString(path, null)
+        _state.update { it.copy(tags = it.tags - path) }
+        speciesCache.edit().putString(path, USER_NO).apply()
         kinds?.let { m -> m[old.latin]?.let { n -> if (n <= 1) m.remove(old.latin) else m[old.latin] = n - 1 } }
         viewModelScope.launch { writeTags(mapOf(photo to null)) }
+        return {
+            _state.update { it.copy(tags = it.tags + (path to old)) }
+            speciesCache.edit().apply { if (verdict == null) remove(path) else putString(path, verdict) }.apply()
+            kinds?.let { m -> m[old.latin] = (m[old.latin] ?: 0) + 1 }
+            viewModelScope.launch { writeTags(mapOf(photo to old)) }
+        }
     }
 
     /** Tag writes are read-modify-write of one front-matter line: one at a time, or a quick second Record loses the first. */
@@ -557,8 +557,15 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
         return Event.Collected(t.latin, t.name, t.group, m.keys.indexOf(t.latin) + 1, m.getValue(t.latin), m.size, isNew)
     }
 
-    /** "Not this": the suggestion goes away for good. */
-    fun dismissSuggestion(photo: CameraPhoto) = clearSuggestion(photo.relativePath, userSaidNo = true)
+    /** "Not this": the suggestions on [photos] go away for good. Returns how to undo it. */
+    fun dismissSuggestions(photos: List<CameraPhoto>): () -> Unit {
+        val old = photos.mapNotNull { p -> _state.value.suggestions[p.relativePath]?.let { p.relativePath to it } }.toMap()
+        photos.forEach { clearSuggestion(it.relativePath, userSaidNo = true) }
+        return {
+            speciesCache.edit().apply { old.forEach { (path, s) -> putString(path, encodeSuggestion(s)) } }.apply()
+            _state.update { it.copy(suggestions = it.suggestions + old) }
+        }
+    }
 
     private fun clearSuggestion(path: String, userSaidNo: Boolean = false) {
         speciesCache.edit().putString(path, if (userSaidNo) USER_NO else NO_SPECIES).apply()
@@ -983,7 +990,6 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
         private const val USER_NO = "x"
         private const val KEY_SPECIES_VERDICTS = "speciesVerdictsMadeWith"
         /** Photos of a group "Identify" compares to choose where to open. */
-        private const val BEST_PHOTO_LOOKS = 4
         /** Days (today included) the automatic pass looks at (§17.2). */
         private const val AUTO_DAYS = 3
 

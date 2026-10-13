@@ -2167,6 +2167,9 @@
         <item quantity="other">%d 张</item>
     </plurals>
     <string name="today_species_not">不是</string>
+    <string name="today_undo">撤销</string>
+    <string name="today_species_dismissed">已忽略这个推荐</string>
+    <string name="today_species_removed">已移出图鉴</string>
     <string name="today_species_genus">%s的一种</string>
     <string name="today_species_genus_latin">%s 属的一种</string>
     <string name="today_menu_identify">认一认</string>
