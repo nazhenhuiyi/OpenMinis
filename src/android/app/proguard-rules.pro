@@ -26,3 +26,11 @@
 # NOTE FOR VERIFICATION: debug builds don't minify, so this bug is invisible
 # there. Any change here must be checked against an assembleRelease APK.
 -keep class io.codeconcept.realtimecutvadlibrary.** { *; }
+
+# [T-today-species] ONNX Runtime's JNI layer creates and reads its Java
+# objects by name (OnnxTensor, OrtSession$Result, OrtException and its error
+# codes, OnnxValue subclasses, …), and the AAR's consumer rules only keep its
+# telemetry classes. Kept whole, as with the VAD above: the same failure mode
+# (NoSuchMethodError / ClassNotFoundException thrown from a native call,
+# release builds only) for a package of a few dozen classes.
+-keep class ai.onnxruntime.** { *; }

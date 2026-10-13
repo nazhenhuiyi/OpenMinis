@@ -198,6 +198,8 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
                 .debounce(RELOAD_DEBOUNCE_MS)
                 .collect { load() }
         }
+        // A photo deleted or moved: look the collection's photos up again.
+        viewModelScope.launch { roll.changes().collect { sightingPhotos.clear(); sightingPhotosGone.clear() } }
         load()
     }
 
@@ -365,22 +367,46 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
         val since = LocalDate.now(zone).minusDays((AUTO_DAYS - 1).toLong())
         val groups = days.filter { !it.date.isBefore(since) }.asReversed()
             .flatMap { d -> d.rows.asReversed().filterIsInstance<TodayRow.Group>() }
+        // What was decided before shows at once, in one update; only new photos go to the model.
+        val known = HashMap<String, SpeciesSuggestion>()
+        val fresh = ArrayList<List<CameraPhoto>>()
         for (g in groups) {
+            val todo = ArrayList<CameraPhoto>()
             for (p in g.group.photos) {
                 if (p.relativePath in _state.value.tags) continue
-                val cached = speciesCache.getString(p.relativePath, null)
-                val suggestion = if (cached != null) decodeSuggestion(cached)?.let { c -> SpeciesId.names(context, listOf(c.latin))[c.latin]?.let { c.copy(name = it) } ?: c } else {
-                    val r = SpeciesId.identify(context, Uri.parse(p.uri), takenAtMs = p.takenAtMs) ?: continue
-                    val sure = r.confident?.let { SpeciesSuggestion.of(it, r.region) }
-                    speciesCache.edit().putString(p.relativePath, sure?.let(::encodeSuggestion) ?: NO_SPECIES).apply()
-                    sure
-                } ?: continue
-                // Only ever a suggestion: adding to the collection is the user's own, deliberate step (§17.2).
-                _state.update { it.copy(suggestions = it.suggestions + (p.relativePath to suggestion)) }
+                when (val cached = speciesCache.getString(p.relativePath, null)) {
+                    null -> todo += p
+                    else -> decodeSuggestion(cached)?.let { known[p.relativePath] = it }
+                }
+            }
+            if (todo.isNotEmpty()) fresh += todo
+        }
+        if (known.isNotEmpty()) {
+            val names = SpeciesId.names(context, known.values.map { it.latin }.toSet())
+            val named = known.mapValues { (_, c) -> names[c.latin]?.let { c.copy(name = it) } ?: c }
+            _state.update { it.copy(suggestions = it.suggestions + named) }
+        }
+        // A group's new photos are looked at together and appear together: one timeline update per group, not per photo.
+        for (todo in fresh) {
+            val found = HashMap<String, SpeciesSuggestion>()
+            val verdicts = HashMap<String, String>()
+            for (p in todo) {
+                val r = SpeciesId.identify(context, Uri.parse(p.uri), takenAtMs = p.takenAtMs) ?: continue
+                val sure = r.confident?.let { SpeciesSuggestion.of(it, r.region) }
+                verdicts[p.relativePath] = sure?.let(::encodeSuggestion) ?: NO_SPECIES
+                if (sure != null) found[p.relativePath] = sure
+            }
+            // A "no" or a tag given meanwhile stands.
+            speciesCache.edit().apply { for ((k, v) in verdicts) if (speciesCache.getString(k, null) == null) putString(k, v) }.apply()
+            // Only ever a suggestion: adding to the collection is the user's own, deliberate step (§17.2).
+            // Not for photos tagged or dismissed while the group was being looked at.
+            if (found.isNotEmpty()) _state.update { st ->
+                st.copy(suggestions = st.suggestions + found.filterKeys { it !in st.tags && speciesCache.getString(it, null) != USER_NO })
             }
         }
         // Ready for the next Record tap, off the load path (rebuilt only after a reload dropped it).
         kinds()
+        collection()
     }
 
     /** Candidates for one photo (§17.3), remembered for this screen so flipping between photos is instant. */
@@ -502,19 +528,57 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
     /** One sighting found in the files: a tagged photo, or (older data) a note carrying `species`. */
     private class Sighting(val latin: String, val name: String, val atMs: Long, val body: String, val place: String?, val photos: List<String>)
 
-    private suspend fun sightings(): List<Sighting> {
-        val out = ArrayList<Sighting>()
-        for (d in store.availableDays()) {
-            val doc = store.readDay(d) ?: continue
-            val dayMs = d.atStartOfDay(zone).toInstant().toEpochMilli()
-            for ((path, t) in PhotoSpecies.parse(doc.frontMatter)) out += Sighting(t.latin, t.name, dayMs, "", null, listOf(path))
-            for (e in doc.entries) {
-                val latin = e.species ?: continue
-                val atMs = e.at?.toInstant()?.toEpochMilli() ?: dayMs
-                out += Sighting(latin, e.attrs[JournalEntry.KEY_SPECIES_NAME] ?: latin, atMs, e.body, e.place, e.photos)
+    /**
+     * The sightings of each day file, kept with the file's size and time so a
+     * day is parsed again only when it changed — whoever changed it (Today,
+     * Obsidian, the agent). Opening the collection then reads no files at all
+     * on most days, however long the journal grows.
+     */
+    private class DaySightings(val stamp: Pair<Long, Long>, val list: List<Sighting>)
+    private val sightingIndex = HashMap<LocalDate, DaySightings>()
+    private val sightingLock = kotlinx.coroutines.sync.Mutex()
+
+    private suspend fun sightings(): List<Sighting> = sightingLock.withLock {
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            val days = store.availableDays()
+            sightingIndex.keys.retainAll(days.toSet())
+            val out = ArrayList<Sighting>()
+            for (d in days) {
+                val f = store.fileFor(d)
+                val stamp = f.length() to f.lastModified()
+                val kept = sightingIndex[d]?.takeIf { it.stamp == stamp }
+                    ?: DaySightings(stamp, readSightings(d)).also { sightingIndex[d] = it }
+                out += kept.list
             }
+            out
+        }
+    }
+
+    private suspend fun readSightings(d: LocalDate): List<Sighting> {
+        val doc = store.readDay(d) ?: return emptyList()
+        val dayMs = d.atStartOfDay(zone).toInstant().toEpochMilli()
+        val out = ArrayList<Sighting>()
+        for ((path, t) in PhotoSpecies.parse(doc.frontMatter)) out += Sighting(t.latin, t.name, dayMs, "", null, listOf(path))
+        for (e in doc.entries) {
+            val latin = e.species ?: continue
+            val atMs = e.at?.toInstant()?.toEpochMilli() ?: dayMs
+            out += Sighting(latin, e.attrs[JournalEntry.KEY_SPECIES_NAME] ?: latin, atMs, e.body, e.place, e.photos)
         }
         return out
+    }
+
+    /** Photos of sightings (and those no longer on the phone), looked up once; forgotten when the photo library changes. */
+    private val sightingPhotos = java.util.concurrent.ConcurrentHashMap<String, CameraPhoto>()
+    private val sightingPhotosGone: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+    private suspend fun photosOf(paths: Set<String>): Map<String, CameraPhoto> {
+        val unknown = paths.filter { !sightingPhotos.containsKey(it) && it !in sightingPhotosGone }.toSet()
+        if (unknown.isNotEmpty()) {
+            val found = roll.findByRelativePaths(unknown)
+            sightingPhotos += found
+            sightingPhotosGone += unknown - found.keys
+        }
+        return paths.mapNotNull { p -> sightingPhotos[p]?.let { p to it } }.toMap()
     }
 
     /**
@@ -537,7 +601,7 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
      */
     private suspend fun timedSightings(): Pair<List<Sighting>, Map<String, CameraPhoto>> {
         val raw = sightings()
-        val photos = roll.findByRelativePaths(raw.flatMap { it.photos }.toSet())
+        val photos = photosOf(raw.flatMap { it.photos }.toSet())
         val timed = raw.map { r ->
             if (r.body.isNotEmpty()) r
             else r.photos.firstNotNullOfOrNull { photos[it] }?.let { p -> Sighting(r.latin, r.name, p.takenAtMs, r.body, r.place, r.photos) } ?: r
@@ -572,6 +636,11 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(suggestions = it.suggestions - path) }
     }
 
+    /** The collection as last built, to show at once while it is brought up to date. */
+    @Volatile
+    var lastCollection: List<CollectedSpecies>? = null
+        private set
+
     /** Everything recorded, across all days, most recently seen first (§17.4). */
     suspend fun collection(): List<CollectedSpecies> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         val (all, photos) = timedSightings()
@@ -591,6 +660,7 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
                 )
             }
             .sortedByDescending { it.records.last().atMs }
+            .also { lastCollection = it }
     }
 
     // ── Species page (§17.4) ──────────────────────────────────────────────

@@ -1,6 +1,6 @@
 # 识别模型和物种名单的生成脚本（SPEC §17）
 
-产物（都不进仓库，体积太大）：`bioclip2_img_w8a16.onnx` + `.data`（骁龙 NPU；App 只用 NPU）、`species.bin`、`species.tsv`。中间数据都在 `/tmp/bc-data/`。
+产物（都不进仓库，体积太大）：`bioclip2_img_w8a16.onnx` + `.data`（骁龙 NPU；App 只用 NPU）、`species.bin`、`species.tsv`、`species_prior.bin`（可选）。中间数据都在 `/tmp/bc-data/`。
 
 环境：Python 3 + `pip install pybioclip onnx onnxruntime onnxscript`（`export.py`、`quant.py`、`qdq.py`、`fill.py`、`sim.py` 用这个环境；抓数据的脚本只用标准库）。
 
@@ -19,6 +19,9 @@
 | 8 | `fill.py` | BioCLIP 表里缺的物种，借同属的上级分类拼出完整分类串，用文本编码器补算向量 |
 | 9 | `build_species.py` | 观察 ≥3 条的物种 → `species.tsv`（学名、中文名、属、属中文名、类别、iNat id、中国观察数、分类链、最相近的 4 种）+ int8 的 `species.bin` |
 | 10 | `sim.py` | 在 Mac 上按 App 的阈值重放一遍，检查误报 |
+| 11 | `provinces.py` | 34 个省级行政区的 iNat place id → `provinces.json`（顺序就是 App 里 `PROVINCES` 的顺序） |
+| 12 | `geo_months.py` | 每个省有记录的物种、全国每个月的观察数（iNat，限速，可断点续跑；约 1 小时） |
+| 13 | `build_prior.py` | → `species_prior.bin`（按省有没有 + 按月的季节分布，和 `species.tsv` 逐行对应）。记录太少（< 2000 种）或被截断在 2 万种上限的省份不判"没有" |
 
 `PhoneBench.kt`：测速用的独立小 App（instrumentation，锁屏也能跑），比较 CPU / NNAPI / QNN 和内存选项。
 

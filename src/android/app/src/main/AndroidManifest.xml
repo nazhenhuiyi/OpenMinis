@@ -193,6 +193,18 @@
              on non-Snapdragon phones, hence not required. -->
         <uses-native-library android:name="libcdsprpc.so" android:required="false" />
 
+        <!-- [T-today-species] ONNX Runtime 1.29's AAR registers a provider that,
+             at every app start, loads the 24 MB runtime and starts Microsoft's
+             telemetry client (device id, OS and device info, network and
+             battery state). Species ID promises that nothing but a scientific
+             name leaves the phone, and most launches never identify anything:
+             the provider is removed, and SpeciesId also turns telemetry off on
+             its environment. -->
+        <provider
+            android:name="ai.onnxruntime.TelemetryInitializer"
+            android:authorities="${applicationId}.onnxruntime_telemetry_initializer"
+            tools:node="remove" />
+
         <!-- [T-android-tablet-split] MainActivity resize/rotation handling.
 
              configChanges + resizeableActivity: without them the Activity is

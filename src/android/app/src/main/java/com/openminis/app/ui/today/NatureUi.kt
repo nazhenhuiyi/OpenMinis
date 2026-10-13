@@ -792,7 +792,8 @@ internal fun CollectedBanner(event: TodayViewModel.Event.Collected?, onOpen: (St
  */
 @Composable
 internal fun NatureCollectionPage(vm: TodayViewModel, open: String?, onAsk: (String, List<String>) -> Unit, onDismiss: () -> Unit) {
-    var list by remember { mutableStateOf<List<CollectedSpecies>?>(null) }
+    // The last list at once, then brought up to date (only changed days are read again).
+    var list by remember { mutableStateOf(vm.lastCollection) }
     var filter by remember { mutableStateOf<String?>(null) }
     var detail by remember { mutableStateOf(open) }
     LaunchedEffect(Unit) { list = vm.collection() }

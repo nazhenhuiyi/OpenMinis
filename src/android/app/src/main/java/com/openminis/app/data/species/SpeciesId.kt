@@ -536,7 +536,8 @@ object SpeciesId {
      * phone's NPU can't run the model, and the feature is switched off.
      */
     private fun open(context: Context): OrtSession {
-        val env = OrtEnvironment.getEnvironment()
+        // No usage reports to Microsoft (the AAR's provider that would send them is removed from the manifest too).
+        val env = OrtEnvironment.getEnvironment().also { runCatching { it.setTelemetry(false) } }
         val d = dir(context)!!
         // The DSP side loads its half of QNN from ADSP_LIBRARY_PATH, so the app's own copy must be on it.
         val libDir = context.applicationInfo.nativeLibraryDir

@@ -1,3 +1,5 @@
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.util.Properties
 
 plugins {
@@ -125,6 +127,8 @@ android {
             // Two copies of ONNX Runtime: the VAD's 1.20 and QNN's 1.29. The
             // module's own copy (ortJniLibs below, the 1.29 one) wins the merge.
             pickFirsts += "lib/arm64-v8a/libonnxruntime.so"
+            // The VAD's own library, patched to link against that 1.29 (vadJniLibs below).
+            pickFirsts += "lib/arm64-v8a/libRealtimeCutVadLibrary.so"
             // QNN ships drivers for every Snapdragon generation; keep the NPU
             // ones from the 8 Gen 2 (V73) on. The older DSP/HTP, GPU and
             // pre-V73 parts would only add ~30 MB that never runs.
@@ -428,4 +432,52 @@ val extractOrt by tasks.registering(Copy::class) {
     includeEmptyDirs = false
 }
 android.sourceSets.getByName("main").jniLibs.srcDir(ortJniLibs)
-tasks.matching { it.name.startsWith("merge") && it.name.endsWith("JniLibFolders") }.configureEach { dependsOn(extractOrt) }
+
+// [T-android-vad] The VAD library was linked against ONNX Runtime 1.20 with
+// symbol versioning: it asks for OrtGetApiBase@VERS_1.20.0, which 1.29 does
+// not define (it has @@VERS_1.29.0), so with 1.29 in the APK it failed to
+// load ("cannot locate symbol OrtGetApiBase") and voice input had no VAD.
+// The C API itself is backward compatible (the VAD asks GetApi for its
+// own, older API version), so the only fix needed is the label: its
+// references to Ort* symbols are made unversioned (.gnu.version entry 1 =
+// global), which binds them to whatever version libonnxruntime.so defines.
+// The patched copy goes into this module's jniLibs and wins the merge.
+val vadAar: Configuration by configurations.creating { isTransitive = false }
+dependencies { vadAar("com.github.helloooideeeeea:RealTimeCutVADLibraryForAndroid:1.0.5@aar") }
+val vadJniLibs = layout.buildDirectory.dir("generated/vadJniLibs")
+val patchVad by tasks.registering(Copy::class) {
+    from({ vadAar.map { zipTree(it) } }) { include("jni/arm64-v8a/libRealtimeCutVadLibrary.so"); eachFile { path = path.removePrefix("jni/") } }
+    into(vadJniLibs)
+    includeEmptyDirs = false
+    doLast { unversionOrtSymbols(vadJniLibs.get().file("arm64-v8a/libRealtimeCutVadLibrary.so").asFile) }
+}
+android.sourceSets.getByName("main").jniLibs.srcDir(vadJniLibs)
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("JniLibFolders") }.configureEach { dependsOn(extractOrt, patchVad) }
+
+/** Set the .gnu.version entry of every undefined Ort* dynamic symbol in a 64-bit little-endian ELF to 1 (unversioned). */
+fun unversionOrtSymbols(f: File) {
+    val b = ByteBuffer.wrap(f.readBytes()).order(ByteOrder.LITTLE_ENDIAN)
+    check(b.getInt(0) == 0x464c457f && b.get(4).toInt() == 2) { "$f: not a 64-bit ELF" }
+    val shoff = b.getLong(0x28).toInt()
+    val shentsize = b.getShort(0x3A).toInt()
+    val shnum = b.getShort(0x3C).toInt()
+    fun sh(i: Int) = shoff + i * shentsize
+    val sections = (0 until shnum).map { sh(it) }
+    val dynsym = sections.single { b.getInt(it + 4) == 11 }
+    val versym = sections.single { b.getInt(it + 4) == 0x6fffffff }
+    val dynstr = sh(b.getInt(dynsym + 40))
+    val symOff = b.getLong(dynsym + 24).toInt()
+    val symCount = (b.getLong(dynsym + 32) / 24).toInt()
+    val strOff = b.getLong(dynstr + 24).toInt()
+    val verOff = b.getLong(versym + 24).toInt()
+    fun name(at: Int): String { var e = at; while (b.get(e).toInt() != 0) e++; return String(b.array(), at, e - at) }
+    var patched = 0
+    for (i in 1 until symCount) {
+        val s = symOff + i * 24
+        if (b.getShort(s + 6).toInt() != 0) continue // defined here
+        if (!name(strOff + b.getInt(s)).startsWith("Ort")) continue
+        if (b.getShort(verOff + i * 2).toInt() > 1) { b.putShort(verOff + i * 2, 1); patched++ }
+    }
+    check(patched > 0) { "$f: no versioned Ort* symbols to patch — has the VAD library changed? Check it still loads with ONNX Runtime 1.29." }
+    f.writeBytes(b.array())
+}
