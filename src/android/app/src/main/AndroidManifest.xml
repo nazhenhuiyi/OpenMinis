@@ -187,6 +187,12 @@
         android:enableOnBackInvokedCallback="true"
         android:theme="@style/Theme.Minis">
 
+        <!-- [T-today-species] Qualcomm's FastRPC library, through which ONNX
+             Runtime's QNN provider reaches the Hexagon NPU. Vendor libraries
+             are invisible to apps on Android 12+ unless declared here; absent
+             on non-Snapdragon phones, hence not required. -->
+        <uses-native-library android:name="libcdsprpc.so" android:required="false" />
+
         <!-- [T-android-tablet-split] MainActivity resize/rotation handling.
 
              configChanges + resizeableActivity: without them the Activity is

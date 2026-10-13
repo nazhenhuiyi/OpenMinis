@@ -46,6 +46,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.outlined.CameraAlt
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Eco
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Forum
 import androidx.compose.material.icons.outlined.Image
@@ -206,6 +207,8 @@ fun TodayScreen(
     // The check-in sheet, and which habit's adjust panel it shows (null = the list).
     var sheetOpen by remember { mutableStateOf(false) }
     var sheetEditing by remember { mutableStateOf<String?>(null) }
+    // The "new to your collection" moment after recording a species (§17.2).
+    var collected by remember { mutableStateOf<TodayViewModel.Event.Collected?>(null) }
 
     LaunchedEffect(vm) {
         vm.eventFlow.collect { e ->
@@ -216,6 +219,10 @@ fun TodayScreen(
                 )
                 TodayViewModel.Event.NeedNotificationPermission ->
                     if (Build.VERSION.SDK_INT >= 33) notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                is TodayViewModel.Event.Collected -> {
+                    haptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                    collected = e
+                }
                 TodayViewModel.Event.AllHabitsDone -> {
                     haptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                     Toast.makeText(context, R.string.today_habits_all_done, Toast.LENGTH_SHORT).show()
@@ -236,6 +243,13 @@ fun TodayScreen(
     var viewer by remember { mutableStateOf<Pair<List<CameraPhoto>, Int>?>(null) }
     var showAlbums by remember { mutableStateOf(false) }
     var showHabits by remember { mutableStateOf(false) }
+    // "Identify" (§17.3): which photos, and which one to start on (null = the best-looking).
+    var identifying by remember { mutableStateOf<Pair<List<CameraPhoto>, CameraPhoto?>?>(null) }
+    // Nature collection (§17.4): open, and optionally straight onto one species.
+    var nature by remember { mutableStateOf<String?>(null) }
+    var showNature by remember { mutableStateOf(false) }
+
+    LaunchedEffect(state.speciesReady) { if (state.speciesReady) vm.warmUpSpecies() }
 
     val listState = rememberLazyListState()
     // Reverse layout: index 0 is the newest row, at the bottom.
@@ -252,6 +266,7 @@ fun TodayScreen(
     LaunchedEffect(newestKey) { if (newestKey != null) listState.animateScrollToItem(0) }
 
     Surface(modifier = modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+      Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().statusBarsPadding().imePadding()) {
             TodayTopBar(
                 today = state.today,
@@ -263,6 +278,7 @@ fun TodayScreen(
                 onWeatherAlerts = vm::setWeatherAlerts,
                 onAlbums = { showAlbums = true },
                 onHabits = { showHabits = true },
+                onCollection = { nature = null; showNature = true },
                 habits = state.todayHabits,
                 // No habits at all → a ghost chip that leads to the manager (SPEC §14.3).
                 ghostChip = state.habits.none { !it.archived },
@@ -306,14 +322,33 @@ fun TodayScreen(
                                     if (shown.isNotEmpty()) viewer = shown to start.coerceAtMost(shown.lastIndex)
                                 },
                                 onSaveEdit = { text -> vm.edit(row.note, text); editingId = null },
+                                onSpecies = { latin -> nature = latin; showNature = true },
+                                tags = state.tags,
                                 onCancelEdit = { editingId = null },
                             )
-                            is TodayRow.Group -> GroupRow(
-                                group = row.group,
-                                zone = zone,
-                                onLongPress = { sheetTarget = Target.Group(row.group) },
-                                onOpen = { i -> viewer = row.group.photos to i },
-                            )
+                            is TodayRow.Group -> {
+                                val suggested = row.group.photos.firstOrNull { it.relativePath in state.suggestions }
+                                val sug = suggested?.let { state.suggestions[it.relativePath] }
+                                GroupRow(
+                                    group = row.group,
+                                    zone = zone,
+                                    onLongPress = { sheetTarget = Target.Group(row.group) },
+                                    onOpen = { i -> viewer = row.group.photos to i },
+                                    tags = state.tags,
+                                    onTag = { latin -> nature = latin; showNature = true },
+                                    below = if (suggested == null || sug == null) null else {
+                                        {
+                                            SpeciesSuggestionChip(
+                                                photo = suggested,
+                                                s = sug,
+                                                onOpen = { identifying = row.group.photos to suggested },
+                                                onRecord = { vm.record(suggested, sug) },
+                                                onDismiss = { vm.dismissSuggestion(suggested) },
+                                            )
+                                        }
+                                    },
+                                )
+                            }
                         }
                     }
                     // Reverse layout: emitted just before the divider = the first thing under it (§14.3).
@@ -339,6 +374,14 @@ fun TodayScreen(
                 onSend = vm::send,
             )
         }
+        // Just recorded a species (§17.2): rises above the composer for a moment.
+        CollectedBanner(
+            event = collected,
+            onOpen = { latin -> collected = null; nature = latin; showNature = true },
+            onGone = { collected = null },
+            modifier = Modifier.align(Alignment.BottomCenter).imePadding().padding(bottom = 112.dp),
+        )
+      }
     }
 
     // ── Long-press menu (SPEC §2.4) ──
@@ -349,6 +392,19 @@ fun TodayScreen(
                 close()
                 val (text, uris) = askPayload(context, target, zone)
                 onAskMinis(text, uris)
+            }
+            val hasPhotos = when (target) {
+                is Target.Note -> target.note.photos.any { it.second != null }
+                is Target.Group -> true
+            }
+            if (state.speciesReady && hasPhotos) {
+                SheetItem(Icons.Outlined.Eco, stringResource(R.string.today_menu_identify)) {
+                    close()
+                    identifying = when (target) {
+                        is Target.Note -> target.note.photos.mapNotNull { it.second } to null
+                        is Target.Group -> target.group.photos to null
+                    }
+                }
             }
             when (target) {
                 is Target.Note -> {
@@ -402,7 +458,38 @@ fun TodayScreen(
         )
     }
 
-    viewer?.let { (photos, start) -> PhotoViewer(photos, start, zone, onDismiss = { viewer = null }) }
+    viewer?.let { (photos, start) ->
+        PhotoViewer(
+            photos, start, zone,
+            onDismiss = { viewer = null },
+            onIdentify = if (state.speciesReady) { p -> viewer = null; identifying = photos to p } else null,
+            tags = state.tags,
+            onTag = { latin -> viewer = null; nature = latin; showNature = true },
+        )
+    }
+
+    identifying?.let { (photos, start) ->
+        val askText = stringResource(R.string.today_identify_ask_text)
+        IdentifySheet(
+            vm = vm,
+            photos = photos,
+            start = start,
+            tags = state.tags,
+            onPick = { photo, sug -> vm.record(photo, sug); identifying = null },
+            onUntag = { photo -> vm.untag(photo); identifying = null },
+            onAsk = { photo -> identifying = null; onAskMinis(askText, listOf(photo.uri)) },
+            onDismiss = { identifying = null },
+        )
+    }
+
+    if (showNature) {
+        NatureCollectionPage(
+            vm = vm,
+            open = nature,
+            onAsk = { text, uris -> showNature = false; onAskMinis(text, uris) },
+            onDismiss = { showNature = false },
+        )
+    }
 
     // ── Today's check-ins (SPEC §14.3) ──
     if (sheetOpen) {
@@ -464,6 +551,7 @@ private fun TodayTopBar(
     onWeatherAlerts: (Boolean) -> Unit,
     onAlbums: () -> Unit,
     onHabits: () -> Unit,
+    onCollection: () -> Unit,
     habits: List<com.openminis.app.data.journal.HabitProgress>,
     ghostChip: Boolean,
     onHabitsChip: (ghost: Boolean) -> Unit,
@@ -496,6 +584,11 @@ private fun TodayTopBar(
                     text = { Text(stringResource(R.string.today_habits_menu)) },
                     onClick = { menu = false; onHabits() },
                     modifier = Modifier.testTag("today_menu_habits"),
+                )
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.today_species_menu)) },
+                    onClick = { menu = false; onCollection() },
+                    modifier = Modifier.testTag("today_menu_collection"),
                 )
                 DropdownMenuItem(
                     text = { Text(stringResource(R.string.today_settings_albums)) },
@@ -590,6 +683,8 @@ private fun NoteRow(
     onOpenPhotos: (Int) -> Unit,
     onSaveEdit: (String) -> Unit,
     onCancelEdit: () -> Unit,
+    onSpecies: (String) -> Unit,
+    tags: Map<String, com.openminis.app.data.species.PhotoTag> = emptyMap(),
 ) {
     TimelineRow(
         atMs = note.atMs,
@@ -617,7 +712,19 @@ private fun NoteRow(
         }
         if (note.photos.isNotEmpty()) {
             Spacer(Modifier.height(10.dp))
-            PhotoGrid(note.photos.map { it.second }, onClick = onOpenPhotos)
+            PhotoGrid(note.photos.map { it.second }, onClick = onOpenPhotos, tags = tags, onTag = onSpecies)
+        }
+        note.entry.species?.let { latin ->
+            // The scientific name, quietly: the entry's words already say what it is (§17.2).
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "✦ " + listOfNotNull(note.entry.attrs[com.openminis.app.data.journal.JournalEntry.KEY_SPECIES_NAME], latin).distinct().joinToString(" · "),
+                fontSize = 12.sp,
+                fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                // Opens this species in the nature collection (§17.4).
+                modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable { onSpecies(latin) }.padding(vertical = 2.dp).testTag("today_note_species"),
+            )
         }
     }
 }
@@ -653,7 +760,15 @@ private fun MetaText(s: String) =
     Text(s, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f))
 
 @Composable
-private fun GroupRow(group: TodayGroup, zone: ZoneId, onLongPress: () -> Unit, onOpen: (Int) -> Unit) {
+private fun GroupRow(
+    group: TodayGroup,
+    zone: ZoneId,
+    onLongPress: () -> Unit,
+    onOpen: (Int) -> Unit,
+    tags: Map<String, com.openminis.app.data.species.PhotoTag> = emptyMap(),
+    onTag: (String) -> Unit = {},
+    below: (@Composable () -> Unit)? = null,
+) {
     // No "N photos" header (SPEC §2.5): thumbnails speak for themselves.
     TimelineRow(
         atMs = group.photos.first().takenAtMs,
@@ -665,18 +780,27 @@ private fun GroupRow(group: TodayGroup, zone: ZoneId, onLongPress: () -> Unit, o
         onClick = { onOpen(0) },
         tag = "today_group",
     ) {
-        PhotoGrid(group.photos, onClick = onOpen)
+        PhotoGrid(group.photos, onClick = onOpen, tags = tags, onTag = onTag)
+        below?.invoke()
     }
 }
 
 /** 1 → one large image; 2–4 → 2×2; 5+ → three and "+N" (SPEC §2.5). null = not on this phone. */
 @Composable
-private fun PhotoGrid(photos: List<CameraPhoto?>, onClick: (Int) -> Unit) {
+private fun PhotoGrid(
+    photos: List<CameraPhoto?>,
+    onClick: (Int) -> Unit,
+    tags: Map<String, com.openminis.app.data.species.PhotoTag> = emptyMap(),
+    onTag: (String) -> Unit = {},
+) {
     val shape = RoundedCornerShape(10.dp)
     if (photos.size == 1) {
         // A missing photo keeps only a slim placeholder, not a 4:3 empty frame.
         val size = if (photos[0] == null) Modifier.fillMaxWidth().height(56.dp) else Modifier.fillMaxWidth().aspectRatio(4f / 3f)
-        Thumb(photos[0], size.clip(shape), { onClick(0) }, big = true)
+        Box(size.clip(shape)) {
+            Thumb(photos[0], Modifier.fillMaxSize(), { onClick(0) }, big = true)
+            photos[0]?.let { p -> tags[p.relativePath]?.let { SpeciesTag(it, big = true, onClick = { onTag(it.latin) }, modifier = Modifier.align(Alignment.BottomStart)) } }
+        }
         return
     }
     val cells = if (photos.size > 4) photos.take(4) else photos
@@ -687,6 +811,10 @@ private fun PhotoGrid(photos: List<CameraPhoto?>, onClick: (Int) -> Unit) {
                     val i = r * 2 + c
                     Box(Modifier.weight(1f).aspectRatio(1f)) {
                         Thumb(p, Modifier.fillMaxSize(), { onClick(i) })
+                        val tag = p?.let { tags[it.relativePath] }
+                        if (tag != null && !(photos.size > 4 && i == 3)) {
+                            SpeciesTag(tag, big = false, onClick = { onTag(tag.latin) }, modifier = Modifier.align(Alignment.BottomStart))
+                        }
                         if (photos.size > 4 && i == 3) {
                             Box(Modifier.fillMaxSize().background(Color(0x73000000)), contentAlignment = Alignment.Center) {
                                 Text(stringResource(R.string.today_more_photos, photos.size - 3), color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
@@ -697,6 +825,26 @@ private fun PhotoGrid(photos: List<CameraPhoto?>, onClick: (Int) -> Unit) {
                 if (pair.size == 1) Spacer(Modifier.weight(1f))
             }
         }
+    }
+}
+
+/** The species recorded for a photo, as a pill on the photo (§17.2); tap → its page in the collection. */
+@Composable
+private fun SpeciesTag(tag: com.openminis.app.data.species.PhotoTag, big: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Row(
+        modifier.padding(if (big) 10.dp else 6.dp).clip(RoundedCornerShape(50)).background(Color(0x99000000))
+            .clickable(onClick = onClick).padding(horizontal = if (big) 10.dp else 7.dp, vertical = if (big) 5.dp else 3.dp)
+            .testTag("today_photo_species"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            TodayViewModel.speciesEmoji(tag.group) + " " + speciesName(tag.name, tag.latin),
+            color = Color.White,
+            fontSize = if (big) 13.sp else 11.sp,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+        )
     }
 }
 
@@ -885,7 +1033,15 @@ private fun SheetItem(icon: androidx.compose.ui.graphics.vector.ImageVector, lab
  * others in the same entry (SPEC §2.5). No intermediate grid.
  */
 @Composable
-private fun PhotoViewer(photos: List<CameraPhoto>, start: Int, zone: ZoneId, onDismiss: () -> Unit) {
+private fun PhotoViewer(
+    photos: List<CameraPhoto>,
+    start: Int,
+    zone: ZoneId,
+    onDismiss: () -> Unit,
+    onIdentify: ((CameraPhoto) -> Unit)? = null,
+    tags: Map<String, com.openminis.app.data.species.PhotoTag> = emptyMap(),
+    onTag: (String) -> Unit = {},
+) {
     // Draw behind the system bars so the black backdrop reaches the screen edges.
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         Surface(color = Color.Black, modifier = Modifier.fillMaxSize()) {
@@ -906,12 +1062,29 @@ private fun PhotoViewer(photos: List<CameraPhoto>, start: Int, zone: ZoneId, onD
                     )
                 }
                 val p = photos[pager.currentPage]
-                Text(
-                    DateTimeFormatter.ofPattern("HH:mm").format(Instant.ofEpochMilli(p.takenAtMs).atZone(zone)) + "  ·  " + p.relativePath,
-                    color = Color(0xFFBBBBBB),
-                    fontSize = 12.sp,
-                    modifier = Modifier.navigationBarsPadding().padding(16.dp),
-                )
+                Row(Modifier.fillMaxWidth().navigationBarsPadding().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        DateTimeFormatter.ofPattern("HH:mm").format(Instant.ofEpochMilli(p.takenAtMs).atZone(zone)) + "  ·  " + p.relativePath,
+                        color = Color(0xFFBBBBBB),
+                        fontSize = 12.sp,
+                        modifier = Modifier.weight(1f),
+                    )
+                    tags[p.relativePath]?.let { tag ->
+                        SpeciesTag(tag, big = true, onClick = { onTag(tag.latin) })
+                    }
+                    // Identify the photo being looked at (§17.3).
+                    if (onIdentify != null) {
+                        Row(
+                            Modifier.clip(RoundedCornerShape(50)).background(Color(0x33FFFFFF)).clickable { onIdentify(p) }
+                                .padding(horizontal = 14.dp, vertical = 8.dp).testTag("today_viewer_identify"),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(Icons.Outlined.Eco, null, tint = Color.White, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text(stringResource(R.string.today_menu_identify), color = Color.White, fontSize = 13.sp)
+                        }
+                    }
+                }
             }
         }
     }

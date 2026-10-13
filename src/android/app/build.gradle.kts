@@ -120,6 +120,24 @@ android {
         }
     }
 
+    packaging {
+        jniLibs {
+            // Two copies of ONNX Runtime: the VAD's 1.20 and QNN's 1.29. The
+            // module's own copy (ortJniLibs below, the 1.29 one) wins the merge.
+            pickFirsts += "lib/arm64-v8a/libonnxruntime.so"
+            // QNN ships drivers for every Snapdragon generation; keep the NPU
+            // ones from the 8 Gen 2 (V73) on. The older DSP/HTP, GPU and
+            // pre-V73 parts would only add ~30 MB that never runs.
+            excludes += listOf(
+                "lib/arm64-v8a/libQnnDsp*.so",
+                "lib/arm64-v8a/libQnnGpu.so",
+                "lib/arm64-v8a/libQnnHtpV68*.so",
+                "lib/arm64-v8a/libQnnHtpV69*.so",
+                "lib/arm64-v8a/libQnnSaver.so",
+            )
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -311,6 +329,13 @@ dependencies {
     // note in `ndk`; we ship arm64-v8a only.
     implementation("com.github.helloooideeeeea:RealTimeCutVADLibraryForAndroid:1.0.5@aar")
 
+    // [T-today-species] ONNX Runtime's Java API with the Qualcomm QNN provider,
+    // for on-device species ID (SpeciesId.kt): Snapdragon phones run BioCLIP 2
+    // on the Hexagon NPU, others on the CPU. Its libonnxruntime.so replaces the
+    // VAD library's 1.20 copy (see packaging below) — the C API is backward
+    // compatible, so the VAD keeps working against the newer runtime.
+    implementation("com.microsoft.onnxruntime:onnxruntime-android-qnn:1.29.0")
+
     // rclone, via its official gomobile binding, for backup destinations
     // (SMB / WebDAV / SFTP / S3 / FTP). Build it with
     // `deps/build_rclone_android.sh` — the .aar is a build artifact under
@@ -390,3 +415,17 @@ dependencies {
     androidTestImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
     androidTestImplementation("junit:junit:4.13.2")
 }
+
+// [T-today-species] Put QNN's libonnxruntime.so (1.29) into this module's own
+// jniLibs, so it — not the VAD library's bundled 1.20 — ends up in the APK:
+// the 1.29 Java API refuses to run on the older native runtime.
+val ortAar: Configuration by configurations.creating { isTransitive = false }
+dependencies { ortAar("com.microsoft.onnxruntime:onnxruntime-android-qnn:1.29.0@aar") }
+val ortJniLibs = layout.buildDirectory.dir("generated/ortJniLibs")
+val extractOrt by tasks.registering(Copy::class) {
+    from({ ortAar.map { zipTree(it) } }) { include("jni/arm64-v8a/libonnxruntime.so"); eachFile { path = path.removePrefix("jni/") } }
+    into(ortJniLibs)
+    includeEmptyDirs = false
+}
+android.sourceSets.getByName("main").jniLibs.srcDir(ortJniLibs)
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("JniLibFolders") }.configureEach { dependsOn(extractOrt) }

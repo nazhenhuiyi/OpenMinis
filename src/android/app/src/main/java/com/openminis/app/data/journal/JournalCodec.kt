@@ -31,6 +31,9 @@ data class JournalEntry(
     val photos: List<String>
         get() = attrs[KEY_PHOTOS]?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }.orEmpty()
 
+    /** Scientific name of the living thing in this entry's photo, when the user recorded one (§17). */
+    val species: String? get() = attrs[KEY_SPECIES]?.takeIf { it.isNotBlank() }
+
     /** The time a restore merge compares on (§8.4): last edit, else creation. */
     val revision: OffsetDateTime? get() = edited ?: at
 
@@ -46,6 +49,8 @@ data class JournalEntry(
         const val KEY_PLACE = "place"
         const val KEY_PHOTOS = "photos"
         const val KEY_BY = "by"
+        const val KEY_SPECIES = "species"
+        const val KEY_SPECIES_NAME = "species_name"
         const val BY_MINIS = "minis"
 
         fun create(id: String, at: OffsetDateTime, body: String, photos: List<String> = emptyList()): JournalEntry {
