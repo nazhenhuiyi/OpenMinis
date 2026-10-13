@@ -86,6 +86,41 @@ class JournalStore(
             )
         }
 
+    /**
+     * The agent's edit (§4.6): any of new text, a new moment [at] (which may
+     * move the entry to another day's file) and [addPhotos] appended to its
+     * photos. [by] is recorded only when the text changes — moving or adding
+     * a photo does not make the words someone else's. Returns the day the
+     * entry now lives on, or null if it could not be edited.
+     */
+    suspend fun edit(
+        date: LocalDate,
+        id: String,
+        body: String? = null,
+        at: OffsetDateTime? = null,
+        addPhotos: List<String> = emptyList(),
+        by: String? = null,
+    ): LocalDate? {
+        val old = readDay(date)?.entries?.singleOrNull { it.id == id } ?: return null
+        val attrs = linkedMapOf<String, String?>(JournalEntry.KEY_EDITED to JournalCodec.formatTime(clock()))
+        if (body != null) attrs[JournalEntry.KEY_BY] = by
+        if (at != null) attrs[JournalEntry.KEY_AT] = JournalCodec.formatTime(at)
+        val photos = (old.photos + addPhotos).distinct()
+        if (photos != old.photos) attrs[JournalEntry.KEY_PHOTOS] = photos.joinToString(",")
+        fun transform(e: JournalEntry) = e.copy(
+            heading = at?.let(JournalCodec::headingFor) ?: e.heading,
+            body = body?.trim() ?: e.body,
+        ).withAttrs(attrs)
+
+        val target = at?.toLocalDate() ?: date
+        if (target == date) return if (update(date, id, ::transform)) date else null
+        // Another day: write the new copy first, so a failure in between
+        // leaves a duplicate rather than losing the entry.
+        mutate(target) { text -> JournalCodec.append(text, target, transform(old)) }
+        delete(date, id)
+        return target
+    }
+
     /** Locate an entry by id across all day files, newest day first. */
     suspend fun find(id: String): Pair<LocalDate, JournalEntry>? {
         for (day in availableDays()) {

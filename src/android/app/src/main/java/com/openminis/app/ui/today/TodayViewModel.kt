@@ -582,6 +582,10 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
     companion object {
         private const val TAG = "TodayVM"
         const val PREFS = "today_prefs"
+
+        /** "Record location" in the Today ⋯ menu (§6.4); the agent's notes follow it too. */
+        fun recordsLocation(context: Context): Boolean =
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_RECORD_LOCATION, true)
         private const val KEY_DRAFT = "draft"
         private const val KEY_PENDING = "pending"
         private const val KEY_INFLIGHT = "inflight"

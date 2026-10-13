@@ -2147,7 +2147,7 @@
     <string name="today_photo_saved">已存入相册 · DCIM/Minis</string>
     <string name="today_photo_discarded">已从相册删除这张照片</string>
     <string name="today_capture_failed">拍照失败</string>
-    <string name="today_ask_quote_note">我在 %1$s 写的碎碎念：</string>
+    <string name="today_ask_quote_note">我在 %1$s 写的碎碎念（已在「今日」里，id=%2$s）：</string>
     <string name="today_ask_quote_photos">我在 %1$s 拍的照片：</string>
     <string name="today_more_photos">+%1$d</string>
     <string name="today_viewer_counter">%1$d / %2$d</string>

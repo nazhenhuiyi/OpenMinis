@@ -13128,7 +13128,7 @@ class ChatViewModel(
                 }
             "memory_write" -> executeMemoryWriteTool(argsJson)
             // [T-today-tab] Journal reads/writes go through JournalStore (SPEC §4.6).
-            com.openminis.app.tools.JournalTool.NAME -> com.openminis.app.tools.JournalTool.execute(context, argsJson)
+            com.openminis.app.tools.JournalTool.NAME -> com.openminis.app.tools.JournalTool.execute(context, argsJson, fsSessionId)
             // [T-sub-agents-v1] One tool, five actions. The legacy names are
             // accepted so a replayed call from a transcript written before the
             // rename still dispatches instead of hitting "Unknown tool".
@@ -15155,6 +15155,18 @@ Memory system (currently DISABLED):
         // look like plausible ways to hand work off, and neither runs a tool
         // loop. Pointing at subagent_task from the place the wrong choice is
         // being made is what makes the redirect land.
+        // [T-today-tab] Helpers have no journal tool (AgentTools); telling them
+        // to use it would leave the shell as their only way to write.
+        val journalWriteNote = if (isHelper) {
+            "The journal is read-only for you; if it needs changing, say so in your result and the main agent will do it."
+        } else {
+            "To add, edit or delete entries use the journal tool — never file_write/file_edit/shell on these files."
+        }
+        val habitsWriteNote = if (isHelper) {
+            "Read-only for you."
+        } else {
+            "Use the journal tool (habits / check_in) for them; check-ins are for today only."
+        }
         val delegationOffered = !isHelper &&
             com.openminis.app.agent.jobs.AgentSettings.isEnabled(context)
         val scheduledDelegateNote = if (delegationOffered) {
@@ -15187,8 +15199,8 @@ Shared directory /var/minis/ (bidirectional read/write between shell and app):
   /var/minis/shared/      — Cross-session shared storage for artifacts and documents. Organize by project or topic (e.g. shared/myproject/, shared/datasets/). Do NOT store temporary files here.
   /var/minis/memory/GLOBAL.md    — Persistent global memory (read-only, user-maintained via Settings).
   /var/minis/memory/YYYY-MM-DD.md — Daily memory log.
-  /var/minis/journal/YYYY/MM/YYYY-MM-DD.md — The user's own journal from the Today tab. Each entry starts with "## HH:MM" followed by a "<!-- minis:entry id=… at=… -->" metadata line (may carry lat/lng/place and photos=DCIM/… paths in the phone's photo library). The front matter may record the day's weather (weather, weather_code, temp_min, temp_max). Read it when the user asks what they did, wrote or photographed. To add, edit or delete entries use the journal tool — never file_write/file_edit/shell on these files.
-  /var/minis/journal/habits.md — The user's daily check-in items (e.g. "20 push-ups"); a check-in is a journal entry with habit=<id> done=<n>. Use the journal tool (habits / check_in) for them; check-ins are for today only.
+  /var/minis/journal/YYYY/MM/YYYY-MM-DD.md — The user's own journal: the app's Today tab (今日), where each entry is a 碎碎念. When the user asks to record something in 今日 / 碎碎念 / their journal or diary, it goes here, not into memory. Each entry starts with "## HH:MM" followed by a "<!-- minis:entry id=… at=… -->" metadata line (may carry lat/lng/place and photos=DCIM/… paths in the phone's photo library). The front matter may record the day's weather (weather, weather_code, temp_min, temp_max). Read it when the user asks what they did or wrote. It holds only the photos attached to entries; for what the user photographed, query the photo library with android-photos. ${journalWriteNote}
+  /var/minis/journal/habits.md — The user's daily check-in items (e.g. "20 push-ups"); a check-in is a journal entry with habit=<id> done=<n>. ${habitsWriteNote}
   /var/minis/mounts/<name>/      — User-mounted external folders from Settings → Mount External Folders. Presence and names vary per user; check this directory first when the task references external/user files. Some mounts may be read-only — file_write / file_edit will reject writes with a clear error message.
 
 The minis:// URL scheme:
@@ -15500,10 +15512,13 @@ Scheduled tasks: crontab / at / nohup loops will stop when the app is suspended,
         data class UploadMeta(val linuxPath: String, val size: Long, val modifiedIso: String)
         val metas = mutableListOf<UploadMeta>()
         val nowMs = System.currentTimeMillis()
+        // Local time with its offset: the prompt carries only the date, so a
+        // UTC stamp here was read as the local clock (a 08:36 photo journaled
+        // at "00:40").
         val isoFormatter = java.text.SimpleDateFormat(
-            "yyyy-MM-dd'T'HH:mm:ss'Z'",
+            "yyyy-MM-dd'T'HH:mm:ssXXX",
             java.util.Locale.US,
-        ).apply { timeZone = java.util.TimeZone.getTimeZone("UTC") }
+        )
         val nowStr = isoFormatter.format(java.util.Date(nowMs))
 
         for (attachment in attachments) {

@@ -434,12 +434,14 @@ fun TodayScreen(
 }
 
 private fun askPayload(context: android.content.Context, target: Target, zone: ZoneId): Pair<String, List<String>> {
-    val hm = DateTimeFormatter.ofPattern("HH:mm")
+    // Full date and the entry id: the chat must be able to tell which entry
+    // this is (an older day's note would otherwise be looked for in today's).
+    val hm = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
     return when (target) {
         is Target.Note -> {
             val at = Instant.ofEpochMilli(target.note.atMs).atZone(zone)
             val quote = target.note.entry.body.lines().joinToString("\n") { "> $it" }
-            context.getString(R.string.today_ask_quote_note, hm.format(at)) + "\n" + quote + "\n\n" to
+            context.getString(R.string.today_ask_quote_note, hm.format(at), target.note.entry.id.orEmpty()) + "\n" + quote + "\n\n" to
                 target.note.photos.mapNotNull { it.second?.uri }
         }
         is Target.Group -> {

@@ -199,7 +199,9 @@ object JournalCodec {
 
     /** One entry, always ending in exactly one newline. */
     fun renderEntry(e: JournalEntry): String = buildString {
-        append("## ").append(e.at?.let(::headingFor) ?: e.heading).append('\n')
+        // The heading is the entry's own (§4.3: a user may retitle it in
+        // Obsidian); whoever changes `at` sets a matching heading.
+        append("## ").append(e.heading.ifBlank { e.at?.let(::headingFor).orEmpty() }).append('\n')
         append("<!-- minis:entry ").append(renderAttrs(e.attrs)).append(" -->\n")
         val body = escapeBody(e.body.trimEnd('\n', '\r'))
         if (body.isNotEmpty()) append(body).append('\n')

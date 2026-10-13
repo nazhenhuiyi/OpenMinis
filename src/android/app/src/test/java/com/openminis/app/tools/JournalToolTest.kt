@@ -65,6 +65,123 @@ class JournalToolTest {
     }
 
     @Test
+    fun editMovesTimeWithoutTouchingTheWords() = runBlocking {
+        val s = store()
+        val e = s.add("鱼鳞云", at = now.withHour(0).withMinute(40))
+        val r = call(s, "action" to "edit", "id" to e.id!!, "time" to "08:36")
+        assertTrue(r.output, r.success)
+        val got = s.readDay(today)!!.entries.single()
+        assertEquals("2026-10-11T08:36:00+08:00", got.attrs["at"])
+        assertEquals("08:36", got.heading)
+        assertEquals("鱼鳞云", got.body)
+        assertFalse(got.writtenByMinis) // still the user's words
+        assertTrue(got.attrs.containsKey("edited"))
+    }
+
+    @Test
+    fun editMovesToAnotherDay() = runBlocking {
+        val s = store()
+        val e = s.add("昨晚的电影")
+        val r = call(s, "action" to "edit", "id" to e.id!!, "date" to "2026-10-10", "time" to "21:10")
+        assertTrue(r.output, r.success)
+        assertTrue(s.readDay(today)!!.entries.isEmpty())
+        val got = s.readDay(today.minusDays(1))!!.entries.single()
+        assertEquals(e.id, got.id)
+        assertEquals("2026-10-10T21:10:00+08:00", got.attrs["at"])
+        assertFalse(call(s, "action" to "edit", "id" to e.id!!, "date" to "2026-10-12").success) // future
+        assertFalse(call(s, "action" to "edit", "id" to e.id!!).success)                       // nothing to change
+    }
+
+    @Test
+    fun photosAreImportedAndAttached() = runBlocking {
+        val s = store()
+        val imported = mutableListOf<String>()
+        val importer: suspend (String) -> String? = { p ->
+            if (p.startsWith("/var/minis/")) "DCIM/Minis/${p.substringAfterLast('/')}".also { imported += p } else null
+        }
+        fun run(vararg kv: Pair<String, String>) = runBlocking {
+            val o = JSONObject().put("tool_title", "t")
+            kv.forEach { (k, v) -> o.put(k, v) }
+            JournalTool.execute(s, o.toString(), zone, importer)
+        }
+        val r = run("action" to "add", "content" to "云", "photos" to "/var/minis/attachments/uploads/a.jpg")
+        assertTrue(r.output, r.success)
+        val id = s.readDay(today)!!.entries.single().id!!
+        assertEquals(listOf("DCIM/Minis/a.jpg"), s.readDay(today)!!.entries.single().photos)
+
+        assertTrue(run("action" to "edit", "id" to id, "photos" to "/var/minis/workspace/b.png").success)
+        assertEquals(listOf("DCIM/Minis/a.jpg", "DCIM/Minis/b.png"), s.readDay(today)!!.entries.single().photos)
+        // Passing back a photo the entry already has changes nothing and says so.
+        val again = run("action" to "edit", "id" to id, "photos" to "/var/minis/attachments/uploads/a.jpg")
+        assertTrue(again.output, again.output.contains("already on this entry"))
+        assertEquals(listOf("DCIM/Minis/a.jpg", "DCIM/Minis/b.png"), s.readDay(today)!!.entries.single().photos)
+
+        // A path that is not there fails the call and writes nothing.
+        assertFalse(run("action" to "add", "content" to "x", "photos" to "nope.jpg").success)
+        assertEquals(1, s.readDay(today)!!.entries.size)
+        // Bad arguments are caught before anything is imported.
+        imported.clear()
+        assertFalse(run("action" to "add", "content" to "x", "time" to "9pm", "photos" to "/var/minis/c.jpg").success)
+        assertTrue(imported.isEmpty())
+    }
+
+    @Test
+    fun everyResultSaysWhatTimeItIs() {
+        val s = store()
+        assertTrue(call(s, "action" to "list").output.endsWith("(Now: 2026-10-11 21:00 Asia/Shanghai)"))
+        assertTrue(call(s, "action" to "rewrite").output.contains("(Now: 2026-10-11 21:00"))
+    }
+
+    @Test
+    fun sameWordsAreNotAddedTwice() = runBlocking {
+        val s = store()
+        val first = call(s, "action" to "add", "content" to "鱼鳞云")
+        val again = call(s, "action" to "add", "content" to "鱼鳞云", "time" to "08:36")
+        assertTrue(again.output, again.success)
+        assertTrue(again.output.startsWith("Not added"))
+        assertEquals(1, s.readDay(today)!!.entries.size)
+        // The user's own identical words do not block Minis.
+        s.add("下雨了")
+        assertTrue(call(s, "action" to "add", "content" to "下雨了").output.startsWith("Added"))
+        assertTrue(first.success)
+    }
+
+    @Test
+    fun backfillingAnotherDayNeedsATime() {
+        val s = store()
+        val r = call(s, "action" to "add", "content" to "看了电影", "date" to "2026-10-10")
+        assertFalse(r.output, r.success)
+        assertTrue(call(s, "action" to "add", "content" to "看了电影", "date" to "2026-10-10", "time" to "21:10").success)
+    }
+
+    @Test
+    fun onlyEntriesAboutNowGetLocated() = runBlocking {
+        val s = store()
+        val located = mutableListOf<String>()
+        fun run(vararg kv: Pair<String, String>) = runBlocking {
+            val o = JSONObject().put("tool_title", "t")
+            kv.forEach { (k, v) -> o.put(k, v) }
+            JournalTool.execute(s, o.toString(), zone, onAddedNow = { _, id -> located += id })
+        }
+        run("action" to "add", "content" to "现在")
+        run("action" to "add", "content" to "早上的事", "time" to "08:00")
+        assertEquals(listOf(s.readDay(today)!!.entries.first { it.body == "现在" }.id), located)
+    }
+
+    @Test
+    fun aCustomHeadingSurvivesAnEdit() = runBlocking {
+        val s = store()
+        val e = s.add("原文")
+        val f = s.fileFor(today)
+        f.writeText(f.readText().replace("## 21:00", "## 我自己的标题"))
+        assertTrue(call(s, "action" to "edit", "id" to e.id!!, "content" to "改过的").success)
+        assertTrue(f.readText().contains("## 我自己的标题\n"))
+        // Moving it gives it the new time as its heading.
+        assertTrue(call(s, "action" to "edit", "id" to e.id!!, "time" to "20:00").success)
+        assertTrue(f.readText().contains("## 20:00\n"))
+    }
+
+    @Test
     fun deleteRemovesOnlyThatEntry() = runBlocking {
         val s = store()
         val a = s.add("留着")
