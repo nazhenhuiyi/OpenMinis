@@ -108,9 +108,17 @@ data class TodayUiState(
 )
 
 /** What Today offers under a photo: "looks like [name]" (§17.2). [genus] = only the genus is claimed. */
-data class SpeciesSuggestion(val latin: String, val name: String, val genus: Boolean, val group: String?, val prob: Float = 1f) {
+data class SpeciesSuggestion(
+    val latin: String,
+    val name: String,
+    val genus: Boolean,
+    val group: String?,
+    val prob: Float = 1f,
+    /** The part of the photo the answer came from, to show beside the reference photos. */
+    val region: SpeciesId.Region? = null,
+) {
     companion object {
-        fun of(g: SpeciesId.Guess) = SpeciesSuggestion(g.latin, g.name, g.genus, g.taxon.group, g.prob)
+        fun of(g: SpeciesId.Guess, region: SpeciesId.Region? = null) = SpeciesSuggestion(g.latin, g.name, g.genus, g.taxon.group, g.prob, region)
     }
 }
 
@@ -168,7 +176,7 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
         data object AllHabitsDone : Event
         data object NeedNotificationPermission : Event
         /** Just recorded a species (§17.2): [times] = how often it has been recorded now, 1 = new to the collection. */
-        data class Collected(val latin: String, val name: String, val group: String?, val number: Int, val times: Int, val total: Int) : Event
+        data class Collected(val latin: String, val name: String, val group: String?, val number: Int, val times: Int, val total: Int, val isNew: Boolean) : Event
     }
     private val events = Channel<Event>(Channel.BUFFERED)
     val eventFlow = events.receiveAsFlow()
@@ -282,10 +290,11 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
                 if (rows.isEmpty() && block.isEmpty() && d != today) null else TodayDay(d, rows, block, weatherByDay[d])
             }
             val hasOlder = store.availableDays().any { it < start } || windowDays < MAX_WINDOW_DAYS
+            val namedTags = withListNames(tags)
             _state.update {
                 it.copy(
                     loaded = true, days = days, access = access, hasOlder = hasOlder, today = today,
-                    habits = habits, todayHabits = todayHabits, tags = tags,
+                    habits = habits, todayHabits = todayHabits, tags = namedTags,
                     weatherAlert = WeatherAlerts.active(context, openHabitNames(todayHabits)),
                 )
             }
@@ -351,19 +360,23 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(speciesReady = ready) }
         if (!ready) return
         migrateSpeciesNotes()
-        val groups = days.asReversed().flatMap { d -> d.rows.asReversed().filterIsInstance<TodayRow.Group>() }
+        refreshSpeciesCache()
+        // Only the last few days are looked at unasked (§17.2); older photos wait for "Identify".
+        val since = LocalDate.now(zone).minusDays((AUTO_DAYS - 1).toLong())
+        val groups = days.filter { !it.date.isBefore(since) }.asReversed()
+            .flatMap { d -> d.rows.asReversed().filterIsInstance<TodayRow.Group>() }
         for (g in groups) {
-            for (p in g.group.photos.take(MAX_PHOTOS_PER_GROUP)) {
+            for (p in g.group.photos) {
                 if (p.relativePath in _state.value.tags) continue
                 val cached = speciesCache.getString(p.relativePath, null)
-                val suggestion = if (cached != null) decodeSuggestion(cached) else {
-                    val r = SpeciesId.identify(context, Uri.parse(p.uri)) ?: continue
-                    val sure = r.confident?.let(SpeciesSuggestion::of)
+                val suggestion = if (cached != null) decodeSuggestion(cached)?.let { c -> SpeciesId.names(context, listOf(c.latin))[c.latin]?.let { c.copy(name = it) } ?: c } else {
+                    val r = SpeciesId.identify(context, Uri.parse(p.uri), takenAtMs = p.takenAtMs) ?: continue
+                    val sure = r.confident?.let { SpeciesSuggestion.of(it, r.region) }
                     speciesCache.edit().putString(p.relativePath, sure?.let(::encodeSuggestion) ?: NO_SPECIES).apply()
                     sure
                 } ?: continue
+                // Only ever a suggestion: adding to the collection is the user's own, deliberate step (§17.2).
                 _state.update { it.copy(suggestions = it.suggestions + (p.relativePath to suggestion)) }
-                break // one suggestion per group is plenty
             }
         }
         // Ready for the next Record tap, off the load path (rebuilt only after a reload dropped it).
@@ -374,14 +387,18 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
     private val identified = HashMap<String, SpeciesId.Result>()
 
     suspend fun identify(photo: CameraPhoto): SpeciesId.Result? =
-        identified[photo.relativePath] ?: SpeciesId.identify(context, Uri.parse(photo.uri), k = 3)?.also { identified[photo.relativePath] = it }
+        identified[photo.relativePath] ?: SpeciesId.identify(context, Uri.parse(photo.uri), k = 3, takenAtMs = photo.takenAtMs)?.also { identified[photo.relativePath] = it }
+
+    /** Only the part of [photo] the user drew a box around (§17.3); not remembered. */
+    suspend fun identify(photo: CameraPhoto, region: SpeciesId.Region): SpeciesId.Result? =
+        SpeciesId.identify(context, Uri.parse(photo.uri), k = 3, region = region, takenAtMs = photo.takenAtMs)
 
     /** Of [photos], the one that looks most like a living thing — where "Identify" opens (§17.3). */
     suspend fun bestPhoto(photos: List<CameraPhoto>): CameraPhoto? {
         val known = photos.firstOrNull { it.relativePath in _state.value.suggestions }
         if (known != null) return known
         var best: Pair<CameraPhoto, Float>? = null
-        for (p in photos.take(MAX_PHOTOS_PER_GROUP)) {
+        for (p in photos.take(BEST_PHOTO_LOOKS)) {
             val r = identify(p) ?: continue
             if (best == null || r.match > best.second) best = p to r.match
         }
@@ -389,29 +406,32 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * Record [s] for [photo] (§17.2, §17.3): a tag on the photo, written to
-     * the front matter of the photo's day. The photo stays where it is — in
-     * its group or under its note.
+     * Record [s] for [photos] (§17.2, §17.3): a tag on each photo, written to
+     * the front matter of the photo's day. The photos stay where they are —
+     * in their group or under their note.
      */
-    fun record(photo: CameraPhoto, s: SpeciesSuggestion) {
-        clearSuggestion(photo.relativePath)
+    fun record(photos: List<CameraPhoto>, s: SpeciesSuggestion) {
+        if (photos.isEmpty()) return
+        photos.forEach { clearSuggestion(it.relativePath) }
         // The plain name only; "a kind of X" for a genus is added when shown, in the language of the moment.
         val tag = PhotoTag(s.latin, s.name, s.group)
-        val retag = _state.value.tags[photo.relativePath]
-        _state.update { it.copy(tags = it.tags + (photo.relativePath to tag)) }
+        val replaced = photos.mapNotNull { _state.value.tags[it.relativePath] }.filter { it.latin != tag.latin }
+        val fresh = photos.filter { _state.value.tags[it.relativePath]?.latin != tag.latin }
+        _state.update { st -> st.copy(tags = st.tags + photos.associate { it.relativePath to tag }) }
         viewModelScope.launch {
             // Celebrate on the tap, not after the file write and a rescan (§17.2).
-            if (retag?.latin != tag.latin) announce(tag, replacing = retag)
-            setTag(photo, tag)
+            if (fresh.isNotEmpty()) announce(tag, added = fresh.size, replacing = replaced)
+            writeTags(photos.associateWith { tag })
         }
     }
 
-    /** Take a photo's tag off (wrong guess). */
+    /** Take a photo's tag off (wrong guess). It is not suggested or tagged again. */
     fun untag(photo: CameraPhoto) {
         val old = _state.value.tags[photo.relativePath] ?: return
         _state.update { it.copy(tags = it.tags - photo.relativePath) }
+        speciesCache.edit().putString(photo.relativePath, USER_NO).apply()
         kinds?.let { m -> m[old.latin]?.let { n -> if (n <= 1) m.remove(old.latin) else m[old.latin] = n - 1 } }
-        viewModelScope.launch { setTag(photo, null) }
+        viewModelScope.launch { writeTags(mapOf(photo to null)) }
     }
 
     /** Tag writes are read-modify-write of one front-matter line: one at a time, or a quick second Record loses the first. */
@@ -419,11 +439,16 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun dayOf(photo: CameraPhoto): LocalDate = java.time.Instant.ofEpochMilli(photo.takenAtMs).atZone(zone).toLocalDate()
 
-    private suspend fun setTag(photo: CameraPhoto, tag: PhotoTag?) = setTag(dayOf(photo), photo.relativePath, tag)
+    /** Write (null = remove) tags, one front-matter update per day file. */
+    private suspend fun writeTags(changes: Map<CameraPhoto, PhotoTag?>) {
+        for ((day, cs) in changes.entries.groupBy { dayOf(it.key) }) setTags(day, cs.associate { it.key.relativePath to it.value })
+    }
 
-    private suspend fun setTag(day: LocalDate, path: String, tag: PhotoTag?) = tagLock.withLock {
+    private suspend fun setTag(day: LocalDate, path: String, tag: PhotoTag?) = setTags(day, mapOf(path to tag))
+
+    private suspend fun setTags(day: LocalDate, changes: Map<String, PhotoTag?>) = tagLock.withLock {
         val tags = LinkedHashMap(PhotoSpecies.parse(store.readDay(day)?.frontMatter.orEmpty()))
-        if (tag == null) tags.remove(path) else tags[path] = tag
+        for ((path, tag) in changes) if (tag == null) tags.remove(path) else tags[path] = tag
         store.setFrontMatter(day, mapOf(PhotoSpecies.KEY to PhotoSpecies.render(tags)))
     }
 
@@ -451,6 +476,27 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
         prefs.edit().putBoolean(KEY_SPECIES_MIGRATED, true).apply()
+    }
+
+    /**
+     * The model's verdicts are kept per photo; when how photos are looked at
+     * or the species list changes ([SpeciesId.verdictVersion]), they are dropped
+     * so recent photos are looked at again. What the user said no to stays.
+     */
+    private fun refreshSpeciesCache() {
+        val version = SpeciesId.verdictVersion(context)
+        if (prefs.getString(KEY_SPECIES_VERDICTS, null) == version) return
+        val e = speciesCache.edit()
+        for ((k, v) in speciesCache.all) if (v != USER_NO) e.remove(k)
+        e.apply()
+        prefs.edit().putString(KEY_SPECIES_VERDICTS, version).apply()
+    }
+
+    /** Tags whose stored name has no Chinese (written before the list had one) read with today's list's name. */
+    /** Tags named by today's list (their stored names are only the fallback). */
+    private suspend fun withListNames(tags: Map<String, PhotoTag>): Map<String, PhotoTag> {
+        val names = SpeciesId.names(context, tags.values.map { it.latin }.toSet())
+        return tags.mapValues { (_, t) -> names[t.latin]?.let { t.copy(name = it) } ?: t }
     }
 
     /** One sighting found in the files: a tagged photo, or (older data) a note carrying `species`. */
@@ -500,25 +546,29 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** The little celebration after recording: new kind, or seen again (§17.2). */
-    private suspend fun announce(t: PhotoTag, replacing: PhotoTag?) {
+    private suspend fun announce(t: PhotoTag, added: Int, replacing: List<PhotoTag>) = events.send(count(t, added, replacing))
+
+    /** Moves the collection counts for a recording, and says what it means: new kind or seen again, and its number. */
+    private suspend fun count(t: PhotoTag, added: Int, replacing: List<PhotoTag>): Event.Collected {
         val m = kinds()
-        replacing?.let { old -> m[old.latin]?.let { n -> if (n <= 1) m.remove(old.latin) else m[old.latin] = n - 1 } }
-        m[t.latin] = (m[t.latin] ?: 0) + 1
-        val number = m.keys.indexOf(t.latin) + 1
-        events.send(Event.Collected(t.latin, t.name, t.group, number, m.getValue(t.latin), m.size))
+        for (old in replacing) m[old.latin]?.let { n -> if (n <= 1) m.remove(old.latin) else m[old.latin] = n - 1 }
+        val isNew = m[t.latin] == null
+        m[t.latin] = (m[t.latin] ?: 0) + added
+        return Event.Collected(t.latin, t.name, t.group, m.keys.indexOf(t.latin) + 1, m.getValue(t.latin), m.size, isNew)
     }
 
     /** "Not this": the suggestion goes away for good. */
-    fun dismissSuggestion(photo: CameraPhoto) = clearSuggestion(photo.relativePath)
+    fun dismissSuggestion(photo: CameraPhoto) = clearSuggestion(photo.relativePath, userSaidNo = true)
 
-    private fun clearSuggestion(path: String) {
-        speciesCache.edit().putString(path, NO_SPECIES).apply()
+    private fun clearSuggestion(path: String, userSaidNo: Boolean = false) {
+        speciesCache.edit().putString(path, if (userSaidNo) USER_NO else NO_SPECIES).apply()
         _state.update { it.copy(suggestions = it.suggestions - path) }
     }
 
     /** Everything recorded, across all days, most recently seen first (§17.4). */
     suspend fun collection(): List<CollectedSpecies> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         val (all, photos) = timedSightings()
+        val names = SpeciesId.names(context, all.map { it.latin }.toSet())
         all.groupBy { it.latin }.values
             .map { rs -> rs.sortedBy { it.atMs } }
             .sortedBy { it.first().atMs }
@@ -526,7 +576,7 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
                 val t = SpeciesId.taxon(context, rs.first().latin)
                 CollectedSpecies(
                     latin = rs.first().latin,
-                    name = rs.last().name,
+                    name = names[rs.first().latin] ?: rs.last().name,
                     group = t?.group,
                     genus = t?.let { it.genusZh ?: it.genusLatin },
                     number = i + 1,
@@ -536,15 +586,62 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
             .sortedByDescending { it.records.last().atMs }
     }
 
+    // ── Species page (§17.4) ──────────────────────────────────────────────
+
+    /** Names, how common, ranks above and look-alikes — all from the species list, offline. */
+    suspend fun speciesProfile(latin: String): SpeciesId.Profile? = SpeciesId.profile(context, latin)
+
+    /** Wikipedia summary and month-by-month sightings; the cached copy first, then a refresh if due. */
+    suspend fun speciesInfoCached(latin: String): com.openminis.app.data.species.SpeciesInfo.Info? =
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { com.openminis.app.data.species.SpeciesInfo.cached(context, latin) }
+
+    suspend fun speciesInfo(t: SpeciesId.Taxon): com.openminis.app.data.species.SpeciesInfo.Info? =
+        com.openminis.app.data.species.SpeciesInfo.get(context, t)
+
+    /** What a kind looks like (openly licensed iNaturalist photos), for the candidates in "Identify" (§17.3). */
+    suspend fun refPhotos(latin: String, inatId: Long?): List<com.openminis.app.data.species.SpeciesInfo.RefPhoto> =
+        com.openminis.app.data.species.SpeciesInfo.refPhotos(context, latin, inatId)
+
+    /**
+     * What the "What is it?" page shows for a suggestion (§17.3): the species
+     * from the list — or, for a genus, a stand-in built from one of its
+     * species, so names, group and the Wikipedia lookup still work.
+     */
+    suspend fun describe(s: SpeciesSuggestion): SpeciesId.Taxon {
+        if (!s.genus) SpeciesId.taxon(context, s.latin)?.let { return it }
+        val any = SpeciesId.anyOfGenus(context, s.latin)
+        return SpeciesId.Taxon(
+            latin = s.latin, zh = s.name.takeIf { !s.genus }, genusLatin = any?.genusLatin ?: s.latin.substringBefore(' '),
+            genusZh = any?.genusZh ?: s.name.takeIf { s.genus }, group = s.group ?: any?.group, chain = any?.chain.orEmpty(),
+        )
+    }
+
+    /** Where a photo was taken, from its GPS (§6.2); null without location data. */
+    suspend fun placeOf(photo: CameraPhoto): String? = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        val ll = readLatLng(Uri.parse(photo.uri)) ?: return@withContext null
+        TodayLocation.placeName(context, ll.first, ll.second)
+    }
+
+    /** Other kinds in the collection from the same family as [latin] (§17.4). */
+    suspend fun sameFamily(latin: String, all: List<CollectedSpecies>): List<CollectedSpecies> {
+        val taxa = SpeciesId.taxa(context, all.map { it.latin } + latin)
+        val family = taxa[latin]?.chain?.lastOrNull()?.first ?: return emptyList()
+        return all.filter { it.latin != latin && taxa[it.latin]?.chain?.lastOrNull()?.first == family }
+    }
+
     /** Warm the encoder while the user looks at the timeline, so the one-off NPU compile is out of the way. */
     fun warmUpSpecies() = SpeciesId.warmUp(context)
 
-    private fun encodeSuggestion(s: SpeciesSuggestion) = listOf(s.latin, s.name, if (s.genus) "1" else "0", s.group.orEmpty(), s.prob.toString()).joinToString("\t")
+    private fun encodeSuggestion(s: SpeciesSuggestion) = listOf(
+        s.latin, s.name, if (s.genus) "1" else "0", s.group.orEmpty(), s.prob.toString(),
+        s.region?.let { r -> listOf(r.left, r.top, r.right, r.bottom).joinToString(",") }.orEmpty(),
+    ).joinToString("\t")
 
     private fun decodeSuggestion(v: String): SpeciesSuggestion? {
-        if (v == NO_SPECIES) return null
+        if (v == NO_SPECIES || v == USER_NO) return null
         val f = v.split('\t')
-        return if (f.size < 3) null else SpeciesSuggestion(f[0], f[1], f[2] == "1", f.getOrNull(3)?.ifBlank { null }, f.getOrNull(4)?.toFloatOrNull() ?: 1f)
+        val region = f.getOrNull(5)?.split(',')?.mapNotNull { it.toFloatOrNull() }?.takeIf { it.size == 4 }?.let { SpeciesId.Region(it[0], it[1], it[2], it[3]) }
+        return if (f.size < 3) null else SpeciesSuggestion(f[0], f[1], f[2] == "1", f.getOrNull(3)?.ifBlank { null }, f.getOrNull(4)?.toFloatOrNull() ?: 1f, region)
     }
 
     // ── Composer ──────────────────────────────────────────────────────────
@@ -882,7 +979,13 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
         private const val SPECIES_PREFS = "today_species"
         private const val KEY_SPECIES_MIGRATED = "speciesNotesMigrated"
         private const val NO_SPECIES = "-"
-        private const val MAX_PHOTOS_PER_GROUP = 4
+        /** The user dismissed a suggestion or took a tag off: never suggested again, kept across cache refreshes. */
+        private const val USER_NO = "x"
+        private const val KEY_SPECIES_VERDICTS = "speciesVerdictsMadeWith"
+        /** Photos of a group "Identify" compares to choose where to open. */
+        private const val BEST_PHOTO_LOOKS = 4
+        /** Days (today included) the automatic pass looks at (§17.2). */
+        private const val AUTO_DAYS = 3
 
         /** A little sign for the kind of life in an entry (§17.2). */
         fun speciesEmoji(group: String?): String = when (group) {

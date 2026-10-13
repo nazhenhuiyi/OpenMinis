@@ -4,6 +4,10 @@ package com.openminis.app.data.species
  * [T-today-species] The species recorded for a photo (SPEC §17.2): a tag on
  * the photo itself, so recording never pulls a photo out of its group.
  */
+/** No Chinese in it — only a latin name is known (e.g. a genus the list has no Chinese name for). */
+fun String.isLatinOnly(): Boolean = all { it.code <= 0x7F }
+
+/** [latin] is the identity; [name] is what was shown when recorded — the fallback when today's list has no name. */
 data class PhotoTag(val latin: String, val name: String, val group: String?) {
     /** Only the genus was claimed ("a kind of X"): a one-word name. The phrase itself is added when shown, in the current language. */
     val genus: Boolean get() = ' ' !in latin.trim()

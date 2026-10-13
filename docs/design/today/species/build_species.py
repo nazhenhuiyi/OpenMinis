@@ -8,9 +8,19 @@ norms = np.concatenate([np.linalg.norm(np.asarray(E[:, a:a + 50000], np.float32)
 row = {}
 for j, n in enumerate(names):
     if norms[j] > 1e-6: row.setdefault(' '.join(n[0][5:7]), j)
-cn = [x for x in json.load(open('/tmp/bc-data/cn_inat.json')) if x['c'] >= 3]
+cn = [x for x in json.load(open('/tmp/bc-data/cn_all.json')) if x['c'] >= 3]
 syn = json.load(open('/tmp/bc-data/syn.json')) if os.path.exists('/tmp/bc-data/syn.json') else {}
 genus = json.load(open('/tmp/bc-data/cn_genus.json')) if os.path.exists('/tmp/bc-data/cn_genus.json') else {}
+anc = json.load(open('/tmp/bc-data/cn_ancestors.json')) if os.path.exists('/tmp/bc-data/cn_ancestors.json') else {}
+anc.update(genus)
+RANKS = ('kingdom', 'phylum', 'class', 'order', 'family')
+def chain(x):
+    # "Animalia=动物界>Chordata=脊索动物门>…" down to the family; Chinese part may be empty
+    parts = []
+    for a in (x.get('anc') or [])[:-1]:
+        t = anc.get(str(a))
+        if t and t['rank'] in RANKS: parts.append(t['n'] + '=' + (t.get('zh') or ''))
+    return '>'.join(parts)
 # Pets and garden plants are mostly "casual" on iNat, so missing from the list above.
 # BioCLIP files dogs under Canis lupus; in a city photo that is far more often a dog.
 OVERRIDE_ZH = {'Canis lupus': '狗 / 狼'}
@@ -23,6 +33,7 @@ if os.path.exists('/tmp/bc-data/fill_emb.npy'):
     fill = {n: fe[i] for i, n in enumerate(json.load(open('/tmp/bc-data/fill_names.json')))}
 out, used = [], set()
 for x in sorted(cn, key=lambda x: -x['c']):
+    if x['n'] in ('Homo sapiens',): continue  # people are not part of the nature collection
     j = row.get(x['n'])
     if j is None and x['n'] in syn: j = row.get(syn[x['n']])
     if j is None and x['n'] in fill: j = ('fill', x['n'])
@@ -31,11 +42,18 @@ for x in sorted(cn, key=lambda x: -x['c']):
     g = genus.get(str(x['anc'][-2])) if x.get('anc') and len(x['anc']) >= 2 else None
     gl = g['n'] if g and g['rank'] == 'genus' else x['n'].split()[0]
     gz = g['zh'] if g and g['rank'] == 'genus' else None
-    out.append((j, x['n'], OVERRIDE_ZH.get(x['n'], x['zh'] or ''), gl, gz or '', x['g'] or ''))
+    out.append((j, x['n'], OVERRIDE_ZH.get(x['n'], x['zh'] or ''), gl, gz or '', x['g'] or '', str(x['id']), str(x['c']), chain(x)))
 for latin, zh, grp in EXTRA:
     j = row.get(latin)
     if j is None or j in used: print('extra missing/dup', latin); continue
-    used.add(j); out.append((j, latin, zh, latin.split()[0], '', grp))
+    used.add(j); out.append((j, latin, zh, latin.split()[0], '', grp, '', '0', ''))
+# One Chinese genus name per genus: shared from any row that has it, else Wikidata's.
+wd = json.load(open('/tmp/bc-data/genus_wikidata.json')) if os.path.exists('/tmp/bc-data/genus_wikidata.json') else {}
+gz_by = {}
+for o in out:
+    if o[4]: gz_by.setdefault(o[3], o[4])
+for k, v in wd.items(): gz_by.setdefault(k, v)
+out = [o[:4] + (gz_by.get(o[3], ''),) + o[5:] for o in out]
 M = np.stack([fill[o[0][1]] if isinstance(o[0], tuple) else np.asarray(E[:, o[0]], np.float32) for o in out])  # n x 768
 norm = np.linalg.norm(M, axis=1)
 ok = norm > 1e-6
@@ -46,7 +64,13 @@ Q = np.clip(np.round(M / scale[:, None]), -127, 127).astype(np.int8)
 err = np.abs((Q * scale[:, None]) - M).max()
 with open(f'{OUT}/species.bin', 'wb') as f:
     f.write(struct.pack('<4sii', b'SPC1', len(out), 768)); f.write(scale.astype('<f4').tobytes()); f.write(Q.tobytes())
+# Look-alikes: the species nearest in the model's own space — what it would most easily confuse.
+look = []
+for a in range(0, len(M), 2000):
+    sim = M[a:a + 2000] @ M.T
+    for r in range(sim.shape[0]): sim[r, a + r] = -1
+    look += [','.join(map(str, row)) for row in np.argsort(-sim, axis=1)[:, :4]]
 with open(f'{OUT}/species.tsv', 'w') as f:
-    for o in out: f.write('\t'.join(s.replace('\t', ' ') for s in o[1:]) + '\n')
+    for o, lk in zip(out, look): f.write('\t'.join(s.replace('\t', ' ') for s in o[1:]) + '\t' + lk + '\n')
 print(len(out), 'species;', sum(1 for o in out if o[2]), 'with zh;', sum(1 for o in out if o[4]), 'with genus zh; max quant err', round(float(err), 4))
 print(os.path.getsize(f'{OUT}/species.bin') / 1e6, 'MB')

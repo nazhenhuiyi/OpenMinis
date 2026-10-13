@@ -32,6 +32,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -114,6 +115,9 @@ import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+
+/** A timeline suggestion opened on its "What is it?" page: the photos it covers, the guess, and the whole group. */
+private class WhatIs(val photos: List<CameraPhoto>, val suggestion: SpeciesSuggestion, val group: List<CameraPhoto>)
 
 /** What a long-press acted on: a note, or a photo group. */
 private sealed interface Target {
@@ -243,6 +247,8 @@ fun TodayScreen(
     var viewer by remember { mutableStateOf<Pair<List<CameraPhoto>, Int>?>(null) }
     var showAlbums by remember { mutableStateOf(false) }
     var showHabits by remember { mutableStateOf(false) }
+    // "What is it?" for a suggestion on the timeline (§17.3): its photos, the guess, and the group for "other possibilities".
+    var whatIs by remember { mutableStateOf<WhatIs?>(null) }
     // "Identify" (§17.3): which photos, and which one to start on (null = the best-looking).
     var identifying by remember { mutableStateOf<Pair<List<CameraPhoto>, CameraPhoto?>?>(null) }
     // Nature collection (§17.4): open, and optionally straight onto one species.
@@ -327,8 +333,9 @@ fun TodayScreen(
                                 onCancelEdit = { editingId = null },
                             )
                             is TodayRow.Group -> {
-                                val suggested = row.group.photos.firstOrNull { it.relativePath in state.suggestions }
-                                val sug = suggested?.let { state.suggestions[it.relativePath] }
+                                // One suggestion per kind found in the group, its photos together (§17.2).
+                                val byKind = row.group.photos.mapNotNull { p -> state.suggestions[p.relativePath]?.let { p to it } }
+                                    .groupBy { it.second.latin }.values.map { ps -> ps.map { it.first } to ps.first().second }
                                 GroupRow(
                                     group = row.group,
                                     zone = zone,
@@ -336,15 +343,17 @@ fun TodayScreen(
                                     onOpen = { i -> viewer = row.group.photos to i },
                                     tags = state.tags,
                                     onTag = { latin -> nature = latin; showNature = true },
-                                    below = if (suggested == null || sug == null) null else {
+                                    below = if (byKind.isEmpty()) null else {
                                         {
-                                            SpeciesSuggestionChip(
-                                                photo = suggested,
-                                                s = sug,
-                                                onOpen = { identifying = row.group.photos to suggested },
-                                                onRecord = { vm.record(suggested, sug) },
-                                                onDismiss = { vm.dismissSuggestion(suggested) },
-                                            )
+                                            byKind.forEach { (photos, sug) ->
+                                                SpeciesSuggestionChip(
+                                                    photo = photos.first(),
+                                                    count = photos.size,
+                                                    s = sug,
+                                                    onOpen = { whatIs = WhatIs(photos, sug, row.group.photos) },
+                                                    onDismiss = { photos.forEach(vm::dismissSuggestion) },
+                                                )
+                                            }
                                         }
                                     },
                                 )
@@ -475,10 +484,23 @@ fun TodayScreen(
             photos = photos,
             start = start,
             tags = state.tags,
-            onPick = { photo, sug -> vm.record(photo, sug); identifying = null },
+            onPick = { photo, sug -> vm.record(listOf(photo), sug); identifying = null },
             onUntag = { photo -> vm.untag(photo); identifying = null },
             onAsk = { photo -> identifying = null; onAskMinis(askText, listOf(photo.uri)) },
             onDismiss = { identifying = null },
+        )
+    }
+
+    whatIs?.let { w ->
+        WhatIsItPage(
+            vm = vm,
+            photos = w.photos,
+            s = w.suggestion,
+            recorded = state.tags[w.photos.first().relativePath],
+            onAdd = { vm.record(w.photos, w.suggestion); whatIs = null },
+            onRemove = { vm.untag(w.photos.first()); whatIs = null },
+            onOthers = { whatIs = null; identifying = w.group to w.photos.first() },
+            onDismiss = { whatIs = null },
         )
     }
 
@@ -830,9 +852,17 @@ private fun PhotoGrid(
 
 /** The species recorded for a photo, as a pill on the photo (§17.2); tap → its page in the collection. */
 @Composable
-private fun SpeciesTag(tag: com.openminis.app.data.species.PhotoTag, big: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+private fun SpeciesTag(
+    tag: com.openminis.app.data.species.PhotoTag,
+    big: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    /** On the black photo viewer: a light pill, no inset (on a photo it sits inset, dark). */
+    onDark: Boolean = false,
+) {
     Row(
-        modifier.padding(if (big) 10.dp else 6.dp).clip(RoundedCornerShape(50)).background(Color(0x99000000))
+        modifier.padding(if (onDark) 0.dp else if (big) 10.dp else 6.dp).clip(RoundedCornerShape(50))
+            .background(if (onDark) Color(0x33FFFFFF) else Color(0x99000000))
             .clickable(onClick = onClick).padding(horizontal = if (big) 10.dp else 7.dp, vertical = if (big) 5.dp else 3.dp)
             .testTag("today_photo_species"),
         verticalAlignment = Alignment.CenterVertically,
@@ -1062,28 +1092,35 @@ private fun PhotoViewer(
                     )
                 }
                 val p = photos[pager.currentPage]
-                Row(Modifier.fillMaxWidth().navigationBarsPadding().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        DateTimeFormatter.ofPattern("HH:mm").format(Instant.ofEpochMilli(p.takenAtMs).atZone(zone)) + "  ·  " + p.relativePath,
-                        color = Color(0xFFBBBBBB),
-                        fontSize = 12.sp,
-                        modifier = Modifier.weight(1f),
-                    )
-                    tags[p.relativePath]?.let { tag ->
-                        SpeciesTag(tag, big = true, onClick = { onTag(tag.latin) })
-                    }
-                    // Identify the photo being looked at (§17.3).
-                    if (onIdentify != null) {
-                        Row(
-                            Modifier.clip(RoundedCornerShape(50)).background(Color(0x33FFFFFF)).clickable { onIdentify(p) }
-                                .padding(horizontal = 14.dp, vertical = 8.dp).testTag("today_viewer_identify"),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Icon(Icons.Outlined.Eco, null, tint = Color.White, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text(stringResource(R.string.today_menu_identify), color = Color.White, fontSize = 13.sp)
+                Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 16.dp, vertical = 12.dp)) {
+                    // Species and "Identify" get their own row, so the file name never squeezes them (§17.3).
+                    val tag = tags[p.relativePath]
+                    if (tag != null || onIdentify != null) {
+                        Row(Modifier.fillMaxWidth().padding(bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                            if (tag != null) {
+                                SpeciesTag(tag, big = true, onClick = { onTag(tag.latin) }, modifier = Modifier.widthIn(max = 240.dp), onDark = true)
+                            }
+                            Spacer(Modifier.weight(1f))
+                            if (onIdentify != null) {
+                                Row(
+                                    Modifier.clip(RoundedCornerShape(50)).background(Color(0x33FFFFFF)).clickable { onIdentify(p) }
+                                        .padding(horizontal = 14.dp, vertical = 8.dp).testTag("today_viewer_identify"),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Icon(Icons.Outlined.Eco, null, tint = Color.White, modifier = Modifier.size(16.dp))
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(stringResource(R.string.today_menu_identify), color = Color.White, fontSize = 13.sp)
+                                }
+                            }
                         }
                     }
+                    Text(
+                        DateTimeFormatter.ofPattern("HH:mm").format(Instant.ofEpochMilli(p.takenAtMs).atZone(zone)) + "  ·  " + p.displayName,
+                        color = Color(0xFFBBBBBB),
+                        fontSize = 12.sp,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    )
                 }
             }
         }

@@ -1,7 +1,7 @@
 import json, urllib.request, urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 UA = {"User-Agent": "MinisResearch/0.1 (nazhenhuiyi@gmail.com)"}
-d = json.load(open('/tmp/bc-data/cn_inat.json'))
+d = json.load(open('/tmp/bc-data/cn_all.json'))
 names = json.load(open('/tmp/bc-data/txt_emb_species.json'))
 bc = set(' '.join(n[0][5:7]) for n in names)
 todo = [x['n'] for x in d if x['c'] >= 3 and x['n'] not in bc]

@@ -214,6 +214,13 @@ object WeatherAlerts {
             .apply()
     }
 
+    /** The last position saved above (~1 km), or null if Today never had one. Species ID uses it as "where you are" (§17.1). */
+    fun savedLocation(context: Context): Pair<Double, Double>? {
+        val p = prefs(context)
+        if (!p.contains(KEY_LAT)) return null
+        return p.getFloat(KEY_LAT, 0f).toDouble() to p.getFloat(KEY_LNG, 0f).toDouble()
+    }
+
     /**
      * The alert to show under the header while alerts are on, it still applies
      * and the user has not closed it (§16.5), worded with today's [openHabits].

@@ -11,7 +11,7 @@ for j, n in enumerate(names):
     if norms[j] > 1e-6: have.add(b)
     if all(tax[:5]) and tax[5]: genus_tax.setdefault(tax[5], tax[:5])
 syn = json.load(open('/tmp/bc-data/syn.json'))
-cn = [x for x in json.load(open('/tmp/bc-data/cn_inat.json')) if x['c'] >= 3]
+cn = [x for x in json.load(open('/tmp/bc-data/cn_all.json')) if x['c'] >= 3]
 todo, nogenus = [], 0
 for x in cn:
     if x['n'] in have or syn.get(x['n']) in have: continue

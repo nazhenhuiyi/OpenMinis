@@ -1,6 +1,6 @@
 import json, time, urllib.request
 UA = {"User-Agent": "MinisResearch/0.1 (species list for on-device ID; nazhenhuiyi@gmail.com)"}
-d = json.load(open('/tmp/bc-data/cn_inat.json'))
+d = json.load(open('/tmp/bc-data/cn_all.json'))
 ids = sorted({x['anc'][-2] for x in d if x['c'] >= 3 and x.get('anc') and len(x['anc']) >= 2})
 print('genera', len(ids), flush=True)
 out = {}
