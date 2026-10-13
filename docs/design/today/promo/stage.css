@@ -1,0 +1,125 @@
+/* 「今日」宣传片共用的舞台和手机界面（照着 Android 版的「今日」画的）。 */
+html, body { margin: 0; background: #fff; }
+body { width: 540px; height: 960px; overflow: hidden; display: block !important; }
+#frame {
+  position: relative; width: 540px; height: 960px; overflow: hidden; background: #F7FAFC;
+  font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif; color: #17303F;
+}
+#washHost { position: absolute; inset: 0; transform-origin: 50% 30%; }
+#washHost .wash { position: absolute; inset: 0; width: 100%; height: 100%; }
+
+#brand { position: absolute; top: 30px; left: 28px; right: 28px; display: flex; align-items: center; gap: 8px; }
+#brand svg { width: 34px; height: 28px; }
+#brand b { font-size: 20px; font-weight: 800; letter-spacing: .5px; }
+#brand span { font-size: 13px; color: #4A6070; margin-left: 8px; }
+#brand i { margin-left: auto; font-style: normal; font-size: 14px; color: #4A6070; font-variant-numeric: tabular-nums; }
+
+#titles { position: absolute; top: 84px; left: 28px; right: 28px; }
+#title { margin: 0; font-size: 38px; line-height: 1.18; font-weight: 800; letter-spacing: 1px; }
+#sub { margin: 10px 0 0; font-size: 16px; color: #3D5566; }
+
+/* ── 手机 ── */
+#phone {
+  position: absolute; left: 50%; top: 214px; width: 360px; height: 780px; margin-left: -180px;
+  transform-origin: 50% 0; border-radius: 46px; background: #10151A; padding: 10px; box-sizing: content-box;
+  box-shadow: 0 30px 70px rgba(20, 60, 90, .28), 0 0 0 2px rgba(255,255,255,.4) inset;
+}
+.screen {
+  position: relative; width: 360px; height: 780px; border-radius: 36px; overflow: hidden; background: #F4F1F7;
+  color: #1B1B1F; font-family: -apple-system, "PingFang SC", sans-serif;
+}
+.sb { height: 30px; display: flex; align-items: center; justify-content: space-between; padding: 0 26px; font-size: 13px; font-weight: 600; }
+.sb .ic { font-size: 11px; letter-spacing: 1px; }
+.hdr { height: 50px; display: flex; align-items: center; padding: 0 8px 0 18px; }
+.hdr .t { font-size: 22px; font-weight: 700; }
+.hdr .d { font-size: 13px; color: #5F6368; margin-left: 10px; flex: 1; }
+.chip { display: flex; align-items: center; gap: 6px; font-size: 13.5px; color: #4A7FD6; font-weight: 500; padding: 6px 10px; border-radius: 16px; }
+.more { font-size: 20px; width: 40px; text-align: center; letter-spacing: -1px; font-weight: 700; }
+
+.banner {
+  margin: 0 16px; border-radius: 12px; background: #D8ECE8; color: #0F302A; font-size: 12.5px; line-height: 18px;
+  overflow: hidden; display: flex; max-height: 0; opacity: 0;
+}
+.banner .txt { flex: 1; padding: 8px 0 8px 12px; }
+.banner .x { width: 30px; text-align: center; padding-top: 7px; color: #4E6B65; font-size: 13px; }
+
+/* 和 App 一样贴底：新的在最下面，旧的从上面滚出去 */
+.tl { position: absolute; left: 0; right: 0; top: 80px; bottom: 176px; overflow: hidden; }
+.tl .stack { position: absolute; left: 20px; right: 20px; bottom: 0; }
+.grow { overflow: hidden; }
+.divider { display: flex; align-items: center; gap: 10px; margin: 12px 0 8px; font-size: 11.5px; color: #5F6368; white-space: nowrap; }
+.divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: #D3D0D8; }
+.meta { font-size: 11.5px; color: #80848A; margin: 8px 0 4px; }
+.note { font-size: 15px; line-height: 23px; margin-bottom: 6px; }
+.cap { font-size: 11.5px; color: #80848A; margin: 2px 0 2px; }
+.crow { display: flex; align-items: center; gap: 9px; height: 30px; font-size: 14.5px; }
+.crow .p { color: #6B6F75; font-size: 13px; }
+.photos { display: grid; grid-template-columns: 1.4fr 1fr; grid-template-rows: 64px 64px; gap: 4px; margin-bottom: 6px; }
+.photos div { border-radius: 10px; background: #ddd center / cover no-repeat; }
+.photos div:first-child { grid-row: span 2; }
+.photos.two { grid-template-columns: 1fr 1fr; grid-template-rows: 112px; }
+.photos.two div:first-child { grid-row: auto; }
+
+.composer {
+  position: absolute; left: 12px; right: 12px; bottom: 62px; height: 100px; border-radius: 22px; background: #fff;
+  box-shadow: 0 2px 10px rgba(0,0,0,.06);
+}
+.composer .in { position: absolute; left: 16px; right: 16px; top: 14px; font-size: 15px; color: #1B1B1F; }
+.composer .ph { color: #8A8D93; }
+.composer .caret { display: inline-block; width: 1.5px; height: 17px; background: #4A7FD6; vertical-align: -3px; margin-left: 1px; }
+.rbtn { position: absolute; bottom: 10px; width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; font-size: 15px; }
+.cam { left: 12px; background: #F0EEF3; }
+.send { right: 12px; background: #E4E2E7; color: #fff; font-weight: 700; }
+.tabs { position: absolute; left: 0; right: 0; bottom: 0; height: 54px; background: #E9E7EF; display: flex; }
+.tabs div { flex: 1; text-align: center; padding-top: 12px; font-size: 14.5px; color: #5F6368; position: relative; }
+.tabs .sel { color: #1B1B1F; font-weight: 600; }
+.tabs .sel::after { content: ""; position: absolute; left: 50%; bottom: 14px; width: 18px; height: 3px; margin-left: -9px; border-radius: 2px; background: #4A7FD6; }
+
+.scrim { position: absolute; inset: 0; background: #000; opacity: 0; }
+.sheet { position: absolute; left: 0; right: 0; bottom: 0; background: #fff; border-radius: 26px 26px 0 0; padding: 10px 0 26px; transform: translateY(105%); }
+.sheet .handle { width: 34px; height: 4px; border-radius: 2px; background: #C9C6CF; margin: 4px auto 14px; }
+.sheet .head { display: flex; align-items: baseline; padding: 0 22px 8px; }
+.sheet .head b { font-size: 17px; }
+.sheet .head span { font-size: 14px; color: #4A7FD6; margin-left: 8px; flex: 1; }
+.sheet .head i { font-style: normal; font-size: 14px; color: #4A7FD6; }
+.srow { display: flex; align-items: center; gap: 14px; height: 50px; padding: 0 22px; font-size: 16px; border-radius: 10px; }
+.srow .n { flex: 1; }
+.srow .p { color: #5F6368; font-size: 14px; font-variant-numeric: tabular-nums; }
+.sheet .shint { font-size: 12px; color: #9A9DA3; padding: 10px 22px 0; }
+
+.notif {
+  position: absolute; left: 10px; right: 10px; top: 8px; background: rgba(255,255,255,.97); border-radius: 20px; padding: 12px 14px;
+  box-shadow: 0 10px 30px rgba(0,0,0,.18); transform: translateY(-130%); font-size: 12.5px; line-height: 18px;
+}
+.notif .app { display: flex; align-items: center; gap: 6px; color: #6B6F75; font-size: 11.5px; margin-bottom: 4px; }
+.notif .app b { width: 16px; height: 16px; border-radius: 5px; background: #4A7FD6; color: #fff; font-size: 10px; display: grid; place-items: center; }
+.notif .h { font-weight: 600; font-size: 13.5px; margin-bottom: 2px; }
+
+.chat { position: absolute; left: 0; right: 0; top: 30px; bottom: 0; background: #FBFAFD; transform: translateX(100%); }
+.chat .cbar { height: 50px; display: flex; align-items: center; gap: 12px; padding: 0 16px; font-size: 16px; font-weight: 600; }
+.chat .cbar span { font-size: 20px; font-weight: 400; }
+.askb { margin: 10px 16px 0 auto; width: fit-content; white-space: nowrap; background: #ECEAF0; border-radius: 18px; padding: 9px 14px; font-size: 15px; }
+.reply { margin: 18px 18px 0; font-size: 15px; line-height: 24px; white-space: pre-wrap; }
+.reply .who { font-weight: 600; font-size: 14px; margin-bottom: 6px; display: flex; gap: 6px; align-items: center; }
+.chat .composer { bottom: 14px; height: 92px; }
+
+
+/* 小团子：打满一项时站到打卡面板上庆祝，片尾再出来挥手。变换以形象中心（270, 270）为原点 */
+#charHost { position: absolute; left: 0; right: 0; top: 230px; height: 540px; display: grid; justify-items: center; opacity: 0; transform-origin: 270px 270px; }
+#charHost #stageSvg { width: 460px; height: 460px; max-width: none; overflow: visible; margin-top: 40px; }
+
+#finger {
+  position: absolute; width: 40px; height: 40px; margin: -20px 0 0 -20px; border-radius: 50%;
+  background: rgba(255,255,255,.5); border: 2.5px solid rgba(255,255,255,.95);
+  box-shadow: 0 4px 16px rgba(20, 60, 90, .3); opacity: 0; pointer-events: none;
+}
+#ripple {
+  position: absolute; width: 40px; height: 40px; margin: -20px 0 0 -20px; border-radius: 50%;
+  border: 2.5px solid rgba(255,255,255,.95); opacity: 0; pointer-events: none;
+}
+#end { position: absolute; left: 0; right: 0; bottom: 96px; text-align: center; opacity: 0; }
+#end .name { font-size: 60px; font-weight: 900; letter-spacing: 2px; }
+#end .tag { font-size: 19px; color: #3D5566; margin-top: 8px; }
+#end .small { font-size: 12px; color: #6A7F8E; margin-top: 18px; letter-spacing: 1px; }
+#fade { position: absolute; inset: 0; background: #F7FAFC; opacity: 0; pointer-events: none; }
+#proto { position: absolute; left: -5000px; top: 0; width: 1000px; }

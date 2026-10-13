@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Minis 今日 · 一年后的今天</title>
+<!--
+  场景片 ①「一年后的今天」：你为什么要记录——一年后的某个晚上，Minis 把那天还给你。
+  竖屏 540×960，按 2 倍渲染。舞台和手机界面在 stage.css / stage.js（和功能巡礼共用）。
+  「回看」和「你的这一年」是画饼（路线图上的功能，还没做），片子里标了「即将推出」。
+  直接看：在 docs/design/ 起一个本地服务器打开 today/promo/one-year.html。出视频：./build.sh one-year。
+-->
+<script src="../../companion/promo/clock.js"></script>
+<script src="stage.js"></script>
+<link rel="stylesheet" href="stage.css">
+<style>
+  /* 锁屏：一年后的傍晚 */
+  .lock { position: absolute; inset: 0; background: linear-gradient(180deg, #2B3A5C 0%, #6C6A8E 46%, #E7A98A 78%, #F3C9A0 100%); color: #fff; }
+  .lock .sb { color: #fff; }
+  .lock .time { text-align: center; font-size: 76px; font-weight: 300; letter-spacing: 1px; margin-top: 54px; }
+  .lock .date { text-align: center; font-size: 15px; opacity: .9; }
+  .lock .notif { top: 230px; transform: none; opacity: 0; color: #1B1B1F; }
+
+  /* 回看：一年前的这一页 */
+  .review { position: absolute; inset: 0; background: #F4F1F7; opacity: 0; }
+  .rbar { height: 50px; display: flex; align-items: center; gap: 12px; padding: 0 16px; font-size: 16px; font-weight: 600; }
+  .rbar span { font-size: 20px; font-weight: 400; }
+  .rbar i { margin-left: auto; font-style: normal; font-size: 11px; font-weight: 500; color: #4A7FD6; background: #E3EBFA; padding: 3px 8px; border-radius: 10px; }
+  .rbody { position: absolute; left: 0; right: 0; top: 80px; bottom: 0; overflow: hidden; }
+  .rstack { padding: 0 20px; }
+  .rdate { font-size: 22px; font-weight: 700; margin: 4px 0 2px; }
+  .rwx { font-size: 13px; color: #5F6368; margin-bottom: 12px; }
+  .hero { height: 210px; border-radius: 16px; overflow: hidden; position: relative; }
+  .hero div { position: absolute; inset: 0; background: url(photos/994.jpg) center / cover; transform-origin: 60% 50%; }
+  .thumbs { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin-top: 4px; }
+  .thumbs div { height: 96px; border-radius: 12px; background: center / cover; }
+  .quote { margin: 16px 0 4px; font-size: 18px; line-height: 28px; font-weight: 500; }
+  .rmeta { font-size: 12px; color: #80848A; }
+  .rsec { margin-top: 16px; font-size: 12px; color: #80848A; }
+  .rcheck { display: flex; gap: 14px; margin-top: 6px; font-size: 14px; }
+  .rcheck b { color: #4A7FD6; font-weight: 600; }
+
+  /* 这一年：拍立得一张张落下来 */
+  #polas { position: absolute; inset: 0; pointer-events: none; }
+  .pola { position: absolute; left: 50%; top: 250px; width: 300px; margin-left: -150px; padding: 12px 12px 14px; background: #FFFEFA; border-radius: 6px;
+    box-shadow: 0 18px 40px rgba(20, 50, 80, .28); opacity: 0; }
+  .pola .ph { height: 276px; border-radius: 3px; background: center / cover; }
+  .pola .d { font-size: 13px; color: #8A8478; margin-top: 10px; letter-spacing: .5px; }
+  .pola .n { font-size: 16px; color: #2C2A26; margin-top: 4px; line-height: 22px; }
+  #days { position: absolute; left: 0; right: 0; top: 820px; text-align: center; font-size: 15px; color: #3D5566; opacity: 0; font-variant-numeric: tabular-nums; }
+  #days b { font-size: 30px; color: #17303F; margin: 0 4px; }
+
+  /* 你的这一年：Minis 写的信 */
+  #letter { position: absolute; left: 50%; top: 236px; width: 440px; margin-left: -220px; border-radius: 20px; background: #FFFDF8; padding: 26px 28px 30px; box-sizing: border-box;
+    box-shadow: 0 30px 70px rgba(20, 60, 90, .26); opacity: 0; }
+  #letter .lh { font-size: 13px; color: #8A8478; letter-spacing: 1px; }
+  #letter .lt { font-size: 26px; font-weight: 800; margin: 6px 0 18px; }
+  #letter .soon { display: inline-block; font-size: 12px; font-weight: 500; color: #4A7FD6; background: #E3EBFA; padding: 2px 8px; border-radius: 10px; vertical-align: 5px; margin-left: 8px; }
+  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 10px; }
+  .stats div { background: #F6F1E7; border-radius: 14px; padding: 12px 14px; }
+  .stats b { display: block; font-size: 28px; font-weight: 800; font-variant-numeric: tabular-nums; }
+  .stats span { font-size: 13px; color: #6A6458; }
+  #ltext { margin-top: 20px; font-size: 17px; line-height: 29px; color: #2C2A26; white-space: pre-wrap; min-height: 116px; }
+  #ltext .sig { display: block; text-align: right; color: #8A8478; font-size: 14px; margin-top: 6px; }
+</style>
+</head>
+<body class="skin-milk">
+<div id="frame">
+  <div id="washHost"></div>
+  <div id="brand">
+    <svg viewBox="24 62 192 156"><use href="#char"/></svg><b>Minis</b><span>今日 · 一年后的今天</span><i id="counter"></i>
+  </div>
+  <div id="titles"><h1 id="title"></h1><p id="sub"></p></div>
+
+  <div id="phone"><div class="screen" id="screen">
+    <div class="lock" id="lock">
+      <div class="sb"><span>18:40</span><span class="ic">5G ▂▄▆█ ▮</span></div>
+      <div class="time">18:40</div>
+      <div class="date">10月12日 星期二</div>
+      <div class="notif" id="notif">
+        <div class="app"><b>M</b>Minis · 回看 · 现在</div>
+        <div class="h">一年前的今天 🌇</div>
+        你在江边遛狗，写下「晚霞好看到不想回家」
+      </div>
+    </div>
+    <div class="review" id="review">
+      <div class="sb"><span>18:40</span><span class="ic">5G ▂▄▆█ ▮</span></div>
+      <div class="rbar"><span>‹</span>一年前的今天<i>即将推出</i></div>
+      <div class="rbody"><div class="rstack" id="rstack">
+        <div class="rdate">2026年10月12日 · 周一</div>
+        <div class="rwx">🌦 阵雨 17–24° · 江边</div>
+        <div class="hero"><div id="heroImg"></div></div>
+        <div class="thumbs"><div style="background-image:url(photos/1051.jpg)"></div><div style="background-image:url(photos/237.jpg)"></div></div>
+        <div class="quote">下班去江边遛了狗，<br>晚霞好看到不想回家 🌇</div>
+        <div class="rmeta">18:46 · 江边</div>
+        <div class="rsec">那天的打卡</div>
+        <div class="rcheck"><span>✅ 俯卧撑 <b>20/20</b></span><span>深蹲 <b>20/50</b></span></div>
+        <div class="rsec">那天中午</div>
+        <div class="quote" style="font-size:16px;margin-top:4px">中午的牛肉面有点咸，下次换一家 🍜</div>
+      </div></div>
+    </div>
+  </div></div>
+
+  <div id="polas"></div>
+  <div id="days">第<b id="dayN">1</b>天</div>
+
+  <div id="letter">
+    <div class="lh">2026.10 — 2027.10</div>
+    <div class="lt">你的这一年<span class="soon">即将推出</span></div>
+    <div class="stats">
+      <div><b data-n="286">0</b><span>天有记录</span></div>
+      <div><b data-n="1846">0</b><span>张照片</span></div>
+      <div><b data-n="6940">0</b><span>个俯卧撑</span></div>
+      <div><b data-n="23">0</b><span>个去过的地方</span></div>
+    </div>
+    <div id="ltext"></div>
+  </div>
+
+  <div id="charHost"></div>
+  <div id="end">
+    <div class="name">Minis 今日</div>
+    <div class="tag">你今天随手记的，一年后都是礼物</div>
+    <div class="small">MINIS · TODAY</div>
+  </div>
+  <div id="ripple"></div>
+  <div id="finger"></div>
+  <div id="fade"></div>
+</div>
+<div id="proto"></div>
+
+<script>
+(async () => {
+  const { $, clamp, smooth, ease, backOut, cue } = Stage;
+  const DURATION = 31;
+  const M = await Stage.load();
+
+  const SCENES = [
+    { t: 0.0,  title: '一年前的今天',               sub: '你在做什么？……是不是已经想不起来了' },
+    { t: 4.2,  title: 'Minis 都替你记着',          sub: '那天的天气、照片，和你随手写下的一句话' },
+    { t: 12.4, title: '这一年，你记下了 286 天',     sub: '每一天都很普通，加起来就是你的生活' },
+    { t: 19.6, title: '年底，Minis 给你写一封信',    sub: '你的这一年，它都读过' },
+    { t: 25.8, title: '', sub: '', end: true },
+  ];
+
+  const POLAS = [
+    ['559', '2026.11.28', '今年第一场雪，踩上去咯吱咯吱的 ❄️'],
+    ['635', '2027.01.29', '过年回家，爸妈泡了一下午的茶 🍵'],
+    ['106', '2027.03.21', '楼下的海棠开了，春天真的来了 🌸'],
+    ['1026', '2027.05.16', '出差回来的路上，晚霞把铁轨染成了金色'],
+    ['640', '2027.07.09', '第一次带狗狗去看海，它比我还疯 🌊'],
+    ['292', '2027.09.05', '第一次请朋友来家里吃饭，居然都吃光了 🍳'],
+  ];
+  const POLA = { from: 12.8, every: 1.05 };
+  const DAYS = [41, 103, 155, 211, 265, 286]; // 每张落下时，计数跳到第几天
+  $('polas').innerHTML = POLAS.map(([id, d, n]) =>
+    `<div class="pola"><div class="ph" style="background-image:url(photos/${id}.jpg)"></div><div class="d">${d}</div><div class="n">${n}</div></div>`).join('');
+  const polaEls = [...document.querySelectorAll('.pola')];
+
+  const LETTER = '你最常写的词是「好累」，\n但写得最多的，是「好看」。\n谢谢你，把这一年过得这么认真。';
+  const WRITE = { from: 21.9, every: 0.07 };
+
+  const TAPS = [[6.3, () => $('notif')]];
+  const ACTIONS = [
+    [0.4, () => cue('open')],
+    [4.6, () => cue('notify')],
+    [6.45, () => cue('swipe')],
+    ...POLAS.map((_, i) => [POLA.from + i * POLA.every, () => cue('pola', { i })]),
+    [19.7, () => cue('letter')],
+    [20.3, () => cue('count', { until: 21.7 })],
+    [WRITE.from, () => cue('write', { until: WRITE.from + LETTER.length * WRITE.every })],
+    [24.4, () => { M.sim.happyUntil = performance.now() + 1500; M.hop(160); cue('sign'); }],
+  ];
+
+  function update(t) {
+    // 手机：开场浮上来；拍立得那段退到后面；写信时离场
+    const enter = ease((t - 0.3) / 1.0), back = smooth(12.2, 12.9, t), leave = smooth(19.3, 19.8, t);
+    $('phone').style.opacity = (smooth(0.3, 0.9, t) * (1 - back)).toFixed(3);
+    $('phone').style.transform = `translateY(${((1 - enter) * 80 + back * 30).toFixed(1)}px) scale(${(0.84 - back * 0.08).toFixed(4)})`;
+
+    // 锁屏通知：落下来，被点开
+    const notK = ease((t - 4.6) / 0.5);
+    $('notif').style.opacity = smooth(4.6, 4.9, t).toFixed(3);
+    $('notif').style.transform = `translateY(${((1 - notK) * -40).toFixed(1)}px) scale(${(0.96 + 0.04 * notK - (t > 6.3 ? smooth(6.3, 6.45, t) * 0.03 : 0)).toFixed(4)})`;
+
+    // 回看页：从通知里展开，照片慢慢推近，往下读
+    const open = ease((t - 6.45) / 0.55);
+    $('review').style.opacity = open.toFixed(3);
+    $('review').style.transform = `scale(${(0.94 + 0.06 * open).toFixed(4)})`;
+    $('heroImg').style.transform = `scale(${(1.04 + 0.1 * smooth(6.5, 12.4, t)).toFixed(4)})`;
+    $('rstack').style.transform = `translateY(${(-smooth(9.6, 11.6, t) * 150).toFixed(1)}px)`;
+
+    // 这一年：拍立得一张张落下，前面的往后退一点
+    polaEls.forEach((el, i) => {
+      const at = POLA.from + i * POLA.every;
+      const k = ease((t - at) / 0.6);
+      const after = (t - at) / POLA.every; // 后面落下了几张
+      const rot = [-6, 5, -3, 7, -5, 2][i];
+      const dx = [-34, 30, -20, 26, -12, 0][i];
+      const sink = clamp(after - 1, 0, 4);
+      el.style.opacity = (smooth(at, at + 0.2, t) * (1 - smooth(19.3, 19.7, t))).toFixed(3);
+      el.style.transform = `translate(${(dx + (1 - k) * 160).toFixed(1)}px, ${((1 - k) * 260 - sink * 4).toFixed(1)}px) rotate(${(rot + (1 - k) * 14).toFixed(2)}deg) scale(${(1 - sink * 0.035).toFixed(4)})`;
+      el.style.filter = sink > 0 ? `brightness(${(1 - sink * 0.04).toFixed(3)})` : '';
+      el.style.zIndex = i;
+    });
+    let dn = 0;
+    DAYS.forEach((d, i) => { const at = POLA.from + i * POLA.every; if (t >= at) dn = Math.round((i ? DAYS[i - 1] : 0) + (d - (i ? DAYS[i - 1] : 0)) * ease((t - at) / 0.5)); });
+    $('dayN').textContent = Math.max(1, dn);
+    $('days').style.opacity = (smooth(12.8, 13.2, t) * (1 - smooth(19.2, 19.6, t))).toFixed(3);
+
+    // 你的这一年：信展开，数字涨上来，Minis 一句句写
+    const lk = ease((t - 19.7) / 0.6);
+    $('letter').style.opacity = (smooth(19.7, 20.0, t) * (1 - smooth(25.5, 25.9, t))).toFixed(3);
+    $('letter').style.transform = `translateY(${((1 - lk) * 50).toFixed(1)}px) rotate(${(1.5 * (1 - lk)).toFixed(2)}deg)`;
+    document.querySelectorAll('.stats b').forEach((b, i) => {
+      const k = ease((t - 20.3 - i * 0.15) / 1.2);
+      b.textContent = Math.round(+b.dataset.n * k).toLocaleString('en-US');
+    });
+    const w = clamp(Math.floor((t - WRITE.from) / WRITE.every), 0, [...LETTER].length);
+    $('ltext').innerHTML = [...LETTER].slice(0, w).join('').replace(/\n/g, '<br>') + (t >= 24.3 ? '<span class="sig">—— Minis</span>' : '');
+
+    // 小团子在信的右下角「签名」，片尾再从天上掉下来
+    if (t < 25.9) {
+      const lr = $('letter').getBoundingClientRect();
+      const k = backOut((t - 24.2) / 0.4) * (1 - smooth(25.4, 25.8, t));
+      $('charHost').style.opacity = t >= 24.2 && t < 25.8 ? 1 : 0;
+      $('charHost').style.transform = `translate(${(lr.right - 56 - 270).toFixed(1)}px, ${(lr.bottom - 24 - 500).toFixed(1)}px) scale(${(0.34 * k).toFixed(4)})`;
+      $('shadow').style.opacity = 0;
+    }
+  }
+
+  Stage.run({ M, duration: DURATION, scenes: SCENES, actions: ACTIONS, taps: TAPS, update, ending: { at: 26.0 } });
+})();
+</script>
+</body>
+</html>

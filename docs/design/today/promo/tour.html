@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Minis 今日 · 功能巡礼</title>
+<!--
+  竖屏宣传片（540×960 CSS px，按 2 倍渲染成 1080×1920）。
+  功能巡礼：一支片子把「今日」的功能挨个过一遍。手机界面、水彩底、字幕、手指和片尾在 stage.css / stage.js，
+  和其它场景片共用；时钟和逐帧渲染和 companion 宣传片共用。
+  直接看：在 docs/design/ 起一个本地服务器打开 today/promo/tour.html。
+  出视频：./build.sh tour。
+-->
+<script src="../../companion/promo/clock.js"></script>
+<script src="stage.js"></script>
+<link rel="stylesheet" href="stage.css">
+<style>
+  /* 文件卡片：「数据是你自己的」 */
+  #file {
+    position: absolute; left: 50%; top: 250px; width: 440px; margin-left: -220px; border-radius: 18px; background: #FFFEFB;
+    box-shadow: 0 30px 70px rgba(20, 60, 90, .30); overflow: hidden; opacity: 0;
+  }
+  #file .fbar { height: 40px; background: #F1EEE6; display: flex; align-items: center; gap: 8px; padding: 0 16px; font-size: 13px; color: #6A6458; }
+  #file .fbar i { width: 10px; height: 10px; border-radius: 50%; background: #E2DED3; font-style: normal; }
+  #file pre { margin: 0; padding: 16px 22px 20px; font: 13.5px/22px "SF Mono", Menlo, monospace; color: #2F3437; white-space: pre-wrap; }
+  #file .c { color: #B3AEA2; }
+  #file .h { color: #7A5AC8; font-weight: 600; }
+  #file .fm { color: #3E8E7E; }
+  #cheer {
+    position: absolute; left: 0; top: 0; padding: 8px 14px; border-radius: 18px 18px 4px 18px; background: #fff; color: #1B1B1F;
+    font-size: 15px; font-weight: 600; box-shadow: 0 8px 24px rgba(30, 80, 120, .22); opacity: 0; white-space: nowrap; transform-origin: 100% 100%;
+  }
+</style>
+</head>
+<body class="skin-milk">
+<div id="frame">
+  <div id="washHost"></div>
+  <div id="brand">
+    <svg viewBox="24 62 192 156"><use href="#char"/></svg><b>Minis</b><span>今日 · 功能演示</span><i id="counter"></i>
+  </div>
+  <div id="titles"><h1 id="title"></h1><p id="sub"></p></div>
+
+  <div id="phone"><div class="screen" id="screen">
+    <div class="sb"><span id="clock">18:45</span><span class="ic">5G ▂▄▆█ ▮</span></div>
+    <div class="hdr">
+      <span class="t">今日</span><span class="d">10月12日周一</span>
+      <span class="chip" id="chip"><svg id="chipRing" width="20" height="20"></svg><span id="chipText">0/3</span></span>
+      <span class="more">···</span>
+    </div>
+    <div class="banner" id="banner"><div class="txt">🌧 19:30 前后可能开始下雨，出门记得带伞<br>今天的「跑步」还没完成，可以改到室内，或者趁天气变化前完成</div><div class="x">✕</div></div>
+    <div class="tl" id="tl"><div class="stack">
+      <div class="divider">昨天 · 10月11日周日 · ⛅ 多云 16–22°</div>
+      <div class="cap">打卡  ·  3/3</div>
+      <div class="crow"><svg data-ring="done" width="17" height="17"></svg>俯卧撑 <span class="p">20/20 个</span></div>
+      <div class="crow"><svg data-ring="done" width="17" height="17"></svg>深蹲 <span class="p">50/50 个</span></div>
+      <div class="crow"><svg data-ring="done" width="17" height="17"></svg>跑步 <span class="p">3/3 公里</span></div>
+      <div class="meta">19:40 · 老城区</div>
+      <div class="photos"><div style="background-image:url(photos/351.jpg)"></div><div style="background-image:url(photos/999.jpg)"></div><div style="background-image:url(photos/452.jpg)"></div></div>
+      <div class="meta">23:10</div>
+      <div class="note">和小林吃完饭又去听了场 livehouse，耳朵到现在还嗡嗡的 🎸</div>
+      <div class="divider" id="todayDivider"><span>今天 · 10月12日周一<span id="wx"></span></span></div>
+      <div id="block">
+        <div class="cap" id="blockCap">打卡  ·  0/3</div>
+        <div class="crow" data-h="0"><svg width="17" height="17"></svg>俯卧撑 <span class="p"></span></div>
+        <div class="crow" data-h="1"><svg width="17" height="17"></svg>深蹲 <span class="p"></span></div>
+        <div class="crow" data-h="2"><svg width="17" height="17"></svg>跑步 <span class="p"></span></div>
+      </div>
+      <div class="meta">08:10 · 家</div>
+      <div class="photos two"><div style="background-image:url(photos/493.jpg)"></div><div style="background-image:url(photos/431.jpg)"></div></div>
+      <div class="meta">12:40 · 公司楼下</div>
+      <div class="note">中午的牛肉面有点咸，下次换一家 🍜</div>
+      <div class="grow" id="photoItem" style="max-height:0">
+        <div class="meta">18:20 · 江边</div>
+        <div class="photos"><div style="background-image:url(photos/1051.jpg)"></div><div style="background-image:url(photos/237.jpg)"></div><div style="background-image:url(photos/994.jpg)"></div></div>
+      </div>
+      <div class="grow" id="noteItem" style="max-height:0">
+        <div class="meta">18:46 · 江边</div>
+        <div class="note">下班去江边遛了狗，晚霞好看到不想回家 🌇</div>
+      </div>
+    </div></div>
+    <div class="composer" id="composer">
+      <div class="in"><span id="typed"></span><span class="caret" id="caret" style="opacity:0"></span><span class="ph" id="ph">写点什么…</span></div>
+      <div class="rbtn cam">📷</div><div class="rbtn send" id="sendBtn">↑</div>
+    </div>
+    <div class="tabs"><div class="sel" id="tabToday">今日</div><div id="tabChat">聊天</div></div>
+
+    <div class="chat" id="chat">
+      <div class="cbar"><span>←</span>本周回顾</div>
+      <div class="askb" id="ask">我这周过得怎么样？</div>
+      <div class="reply" id="reply"><div class="who">✦ Minis</div><span id="replyText"></span></div>
+      <div class="composer"><div class="in"><span class="ph">发消息给 Minis</span></div><div class="rbtn cam">＋</div><div class="rbtn send">↑</div></div>
+    </div>
+
+    <div class="scrim" id="scrim"></div>
+    <div class="sheet" id="sheet">
+      <div class="handle"></div>
+      <div class="head"><b>今日打卡</b><span id="sheetCount">0/3</span><i>管理</i></div>
+      <div class="srow" data-s="0"><svg width="22" height="22"></svg><span class="n">俯卧撑</span><span class="p"></span></div>
+      <div class="srow" data-s="1"><svg width="22" height="22"></svg><span class="n">深蹲</span><span class="p"></span></div>
+      <div class="srow" data-s="2"><svg width="22" height="22"></svg><span class="n">跑步</span><span class="p"></span></div>
+      <div class="shint">点一下记一组 · 长按修改</div>
+    </div>
+    <div class="notif" id="notif">
+      <div class="app"><b>M</b>Minis · 天气提醒 · 现在</div>
+      <div class="h">天气提醒</div>
+      🌧 19:30 前后可能开始下雨，出门记得带伞<br>今天的「跑步」还没完成，可以改到室内，或者趁天气变化前完成
+    </div>
+  </div></div>
+
+  <div id="file">
+    <div class="fbar"><i></i><i></i><i></i>&nbsp;journal / 2026 / 10 / 2026-10-12.md</div>
+<pre><span class="fm">---
+weather: 🌦 阵雨 17–24°
+---</span>
+
+<span class="h">## 07:30</span>
+<span class="c">&lt;!-- minis:entry habit=… done=20 --&gt;</span>
+✅ 俯卧撑 20/20 个
+
+<span class="h">## 12:40</span>
+<span class="c">&lt;!-- minis:entry place=公司楼下 --&gt;</span>
+中午的牛肉面有点咸，下次换一家 🍜
+
+<span class="h">## 18:46</span>
+<span class="c">&lt;!-- minis:entry place=江边 --&gt;</span>
+下班去江边遛了狗，晚霞好看到不想回家 🌇</pre>
+  </div>
+
+  <div id="charHost"></div>
+  <div id="end">
+    <div class="name">Minis 今日</div>
+    <div class="tag">做一点，记一点，看见自己</div>
+    <div class="small">MINIS · TODAY</div>
+  </div>
+  <div id="cheer">俯卧撑 · 完成啦 🎉</div>
+  <div id="ripple"></div>
+  <div id="finger"></div>
+  <div id="fade"></div>
+</div>
+<div id="proto"></div>
+
+<script>
+(async () => {
+  const { $, clamp, smooth, ease, backOut, cue } = Stage;
+  const DURATION = 40;
+  const M = await Stage.load();
+
+  // ── 2. 分镜 ──
+  const SCENES = [
+    { t: 0.0,  title: '今日',               sub: '把每一天，轻轻记下来' },
+    { t: 3.4,  title: '天气，自己写进日记',   sub: '每天开头，记下当天的天气' },
+    { t: 6.6,  title: '一组一组地打卡',      sub: '做一组，点一下；打满了，团子为你欢呼' },
+    { t: 13.4, title: '拍的照片，自动出现',   sub: '用相机拍的，按时间聚在一起' },
+    { t: 17.4, title: '想到什么，写一句',     sub: '不用整理，写下就好' },
+    { t: 22.4, title: '下雨前，提醒你一声',   sub: '未来两小时有雨，提前告诉你' },
+    { t: 27.0, title: '问问 Minis',          sub: '它读得懂你的每一天' },
+    { t: 32.0, title: '日记，永远是你的',     sub: '纯文本 Markdown，Obsidian 也能打开' },
+    { t: 35.8, title: '', sub: '', end: true },
+  ];
+
+  const HABITS = [
+    { goal: 20, unit: '个', steps: [8.0, 8.6, 9.2, 9.8], by: 5 },
+    { goal: 50, unit: '个', steps: [10.6, 11.2], by: 10 },
+    { goal: 3, unit: '公里', steps: [], by: 1 },
+  ];
+  const NOTE = '下班去江边遛了狗，晚霞好看到不想回家 🌇';
+  const TYPE = { from: 18.3, every: 0.12 };
+  const REPLY = '这周你打卡了 6 天，俯卧撑一共做了 120 个 💪\n周日和小林去听了 livehouse，今天傍晚在江边遛狗、看了晚霞 🌇\n一会儿可能下雨，跑步可以挪到室内哦。';
+  const STREAM = { from: 28.5, every: 0.034 };
+
+  // 进度圈：空圈 → 弧 → 实心对勾，和 App 里的 ProgressRing 一样
+  const PRIMARY = '#4A7FD6', TRACK = '#C9C6CF';
+  function ring(svg, frac, done, pop = 1) {
+    const s = +svg.getAttribute('width'), w = s > 20 ? 2 : 1.8, r = (s - w) / 2, c = 2 * Math.PI * r;
+    const fill = done ? `<circle cx="${s / 2}" cy="${s / 2}" r="${(s / 2) * pop}" fill="${PRIMARY}"/>
+      <path d="M${s * .3} ${s * .52} L${s * .44} ${s * .66} L${s * .71} ${s * .37}" fill="none" stroke="#fff" stroke-width="${s / 9}" stroke-linecap="round" stroke-linejoin="round" transform="translate(${s / 2} ${s / 2}) scale(${pop}) translate(${-s / 2} ${-s / 2})"/>` : '';
+    svg.innerHTML = `<circle cx="${s / 2}" cy="${s / 2}" r="${r}" fill="none" stroke="${TRACK}" stroke-width="${w}"/>
+      ${frac > 0 && !done ? `<circle cx="${s / 2}" cy="${s / 2}" r="${r}" fill="none" stroke="${PRIMARY}" stroke-width="${w}" stroke-linecap="round"
+        stroke-dasharray="${c * frac} ${c}" transform="rotate(-90 ${s / 2} ${s / 2})"/>` : ''}${fill}`;
+  }
+  document.querySelectorAll('[data-ring="done"]').forEach((r) => ring(r, 1, true));
+
+  // t 时刻每一项完成了多少，和进度圈要画到哪（每一组 0.35 秒长上去）
+  function habitAt(h, t) {
+    let done = 0, shown = 0, doneAt = null;
+    for (const st of h.steps) {
+      if (t < st) break;
+      const prev = done;
+      done = Math.min(h.goal * 2, done + h.by);
+      shown = prev + (done - prev) * ease((t - st) / 0.35);
+      if (done >= h.goal && doneAt == null) doneAt = st;
+    }
+    if (!h.steps.length || t < h.steps[0]) shown = 0;
+    return { done, frac: clamp(shown / h.goal), complete: done >= h.goal, doneAt };
+  }
+
+  const sRow = (i) => document.querySelector(`[data-s="${i}"]`);
+  const sRing = (i) => sRow(i).querySelector('svg');
+  const TAPS = [
+    [6.9, () => $('chip')],
+    ...HABITS.flatMap((h, i) => h.steps.map((st) => [st, () => sRing(i)])),
+    [18.0, () => $('composer')],
+    [20.8, () => $('sendBtn')],
+    [27.3, () => $('tabChat')],
+  ];
+  const SHEET = { open: 7.0, close: 12.4 };
+  // 打满俯卧撑那一下，团子出来庆祝
+  const CEL = { at: HABITS[0].steps.at(-1) + 0.05, out: 11.6 };
+
+  const ACTIONS = [
+    [0.5, () => cue('open')],
+    [3.8, () => cue('weather')],
+    [SHEET.open, () => cue('sheet')],
+    ...HABITS.flatMap((h, i) => h.steps.map((st, k) => [st, () => {
+      const after = Math.min(h.goal * 2, (k + 1) * h.by);
+      cue(after >= h.goal && k * h.by < h.goal ? 'complete' : 'step', { i: k, h: i });
+    }])),
+    [CEL.at, () => { M.setState('done'); cue('celebrate'); }],
+    [SHEET.close, () => cue('sheet', { close: 1 })],
+    [14.0, () => cue('photo')],
+    ...[...NOTE].map((_, i) => [TYPE.from + i * TYPE.every, () => cue('type', { i })]),
+    [21.0, () => cue('send')],
+    [22.9, () => cue('notify')],
+    [25.7, () => cue('banner')],
+    [27.4, () => cue('swipe')],
+    [27.9, () => cue('ask')],
+    [STREAM.from, () => cue('stream', { until: STREAM.from + REPLY.length * STREAM.every })],
+    [32.1, () => cue('file')],
+  ];
+
+  const grow = (el, k) => { el.style.maxHeight = (el.scrollHeight * k).toFixed(1) + 'px'; el.style.opacity = k.toFixed(3); };
+
+  function update(t) {
+    // 手机：开场从下面浮上来，片尾让位给小团子
+    const enter = ease((t - 0.3) / 1.0), leave = smooth(35.6, 36.3, t);
+    $('phone').style.opacity = (smooth(0.3, 0.9, t) * (1 - leave)).toFixed(3);
+    $('phone').style.transform = `translateY(${((1 - enter) * 80 + leave * 40).toFixed(1)}px) scale(${(0.84 - leave * 0.06).toFixed(4)})`;
+    // 文件卡片出现时手机稍微退后
+    const fileK = smooth(32.0, 32.5, t) * (1 - smooth(35.4, 35.9, t));
+    $('screen').style.filter = fileK > 0 ? `blur(${(fileK * 3).toFixed(2)}px)` : '';
+    $('file').style.opacity = fileK.toFixed(3);
+    $('file').style.transform = `translateY(${((1 - ease((t - 32.0) / 0.6)) * 40).toFixed(1)}px) rotate(${(-1.2 * fileK).toFixed(2)}deg)`;
+
+    // 天气写进今天的分隔线
+    const wxN = Math.floor(clamp((t - 3.8) / 0.9) * 14);
+    $('wx').textContent = wxN > 0 ? [...' · 🌦 阵雨 17–24°'].slice(0, wxN + 1).join('') : '';
+    const glow = smooth(3.8, 4.1, t) * (1 - smooth(5.6, 6.3, t));
+    $('todayDivider').style.color = glow > 0.01 ? `rgb(${Math.round(95 - 21 * glow)},${Math.round(99 + 28 * glow)},${Math.round(104 + 110 * glow)})` : '';
+    $('todayDivider').style.fontWeight = glow > 0.5 ? 600 : 400;
+
+    // 打卡：顶栏圆圈、面板、时间线里的打卡块
+    const hs = HABITS.map((h) => habitAt(h, t));
+    const nDone = hs.filter((x) => x.complete).length;
+    ring($('chipRing'), hs.reduce((a, x) => a + x.frac, 0) / hs.length, nDone === hs.length);
+    $('chipText').textContent = `${nDone}/3`;
+    $('sheetCount').textContent = `${nDone}/3`;
+    $('blockCap').textContent = `打卡  ·  ${nDone}/3`;
+    HABITS.forEach((h, i) => {
+      const x = hs[i];
+      const pop = x.doneAt != null ? 0.6 + 0.4 * ease((t - x.doneAt) / 0.3) + 0.12 * Math.sin(clamp((t - x.doneAt) / 0.3) * Math.PI) : 1;
+      const label = `${x.done}/${h.goal} ${h.unit}`;
+      const sr = sRow(i);
+      ring(sr.querySelector('svg'), x.frac, x.complete, pop);
+      sr.querySelector('.p').textContent = label;
+      sr.querySelector('.n').style.color = x.complete ? '#5F6368' : '';
+      const cr = document.querySelector(`[data-h="${i}"]`);
+      ring(cr.querySelector('svg'), x.frac, x.complete, pop);
+      cr.querySelector('.p').textContent = label;
+    });
+    // 点到的那一行闪一下
+    document.querySelectorAll('.srow').forEach((r, i) => {
+      const hit = HABITS[i].steps.some((st) => t >= st && t < st + 0.25);
+      r.style.background = hit ? '#EEF2FB' : '';
+    });
+    const sheetK = ease((t - SHEET.open) / 0.4) * (1 - smooth(SHEET.close, SHEET.close + 0.35, t));
+    $('sheet').style.transform = `translateY(${((1 - sheetK) * 105).toFixed(2)}%)`;
+    $('scrim').style.opacity = (sheetK * 0.32).toFixed(3);
+
+    // 照片、碎碎念长出来
+    grow($('photoItem'), ease((t - 14.0) / 0.6));
+    grow($('noteItem'), ease((t - 21.0) / 0.5));
+
+    // 输入框打字
+    const typing = t >= 18.0 && t < 21.0;
+    const n = clamp(Math.floor((t - TYPE.from) / TYPE.every) + 1, 0, [...NOTE].length);
+    $('typed').textContent = typing ? [...NOTE].slice(0, n).join('') : '';
+    $('ph').style.display = typing && n > 0 ? 'none' : '';
+    $('caret').style.opacity = typing && Math.floor(t * 2.2) % 2 === 0 ? 1 : 0;
+    $('sendBtn').style.background = typing && n > 0 ? PRIMARY : '';
+    $('clock').textContent = t < 20.9 ? '18:45' : '18:46';
+
+    // 天气提醒：系统通知落下来，收起后变成顶栏下的横幅
+    const notK = ease((t - 22.9) / 0.45) * (1 - smooth(25.3, 25.7, t));
+    $('notif').style.transform = `translateY(${((1 - notK) * -130).toFixed(2)}%)`;
+    const banK = ease((t - 25.7) / 0.5);
+    $('banner').style.maxHeight = (banK * 60).toFixed(1) + 'px';
+    $('banner').style.opacity = banK.toFixed(3);
+    $('banner').style.marginBottom = (banK * 6).toFixed(1) + 'px';
+    // 横幅在顶栏下面占位，时间线跟着往下让
+    $('tl').style.top = (80 + $('banner').offsetHeight + banK * 6).toFixed(1) + 'px';
+
+    // 问问 Minis
+    const chatK = ease((t - 27.4) / 0.45) * (1 - smooth(31.8, 32.2, t));
+    $('chat').style.transform = `translateX(${((1 - chatK) * 100).toFixed(2)}%)`;
+    $('tabChat').classList.toggle('sel', t >= 27.3 && t < 32.0);
+    $('tabToday').classList.toggle('sel', !(t >= 27.3 && t < 32.0));
+    $('ask').style.opacity = smooth(27.9, 28.1, t);
+    $('ask').style.transform = `translateY(${((1 - ease((t - 27.9) / 0.3)) * 10).toFixed(1)}px)`;
+    $('reply').style.opacity = smooth(28.4, 28.6, t);
+    const m = clamp(Math.floor((t - STREAM.from) / STREAM.every), 0, [...REPLY].length);
+    $('replyText').textContent = [...REPLY].slice(0, m).join('');
+
+    // 打满一项：团子从打卡面板上冒出来，蹦一下、撒星星，再缩回去
+    if (t < 36) {
+      const sr = $('sheet').getBoundingClientRect();
+      const k = backOut((t - CEL.at) / 0.4) * (1 - smooth(CEL.out, CEL.out + 0.3, t));
+      $('charHost').style.opacity = t >= CEL.at && t < CEL.out + 0.3 ? 1 : 0;
+      const cx = sr.right - 84, cy = sr.top - 36;
+      $('charHost').style.transform = `translate(${(cx - 270).toFixed(1)}px, ${(cy - 500).toFixed(1)}px) scale(${(0.3 * k).toFixed(4)})`;
+      $('shadow').style.opacity = 0;
+      // 团子旁边冒一句「完成啦」
+      const ck = backOut((t - CEL.at - 0.25) / 0.35) * (1 - smooth(CEL.out - 0.1, CEL.out + 0.15, t));
+      const cheer = $('cheer');
+      cheer.style.opacity = clamp(ck * 3).toFixed(3);
+      cheer.style.transform = `translate(${(cx - 60 - cheer.offsetWidth).toFixed(1)}px, ${(cy - 52).toFixed(1)}px) scale(${Math.max(0, ck).toFixed(4)})`;
+    }
+  }
+
+  // ── 3. 开拍 ──
+  Stage.run({ M, duration: DURATION, scenes: SCENES, actions: ACTIONS, taps: TAPS, update, ending: { at: 36.1 } });
+})();
+</script>
+</body>
+</html>

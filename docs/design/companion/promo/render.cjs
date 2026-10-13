@@ -1,18 +1,20 @@
 // 逐帧渲染 promo.html → 无声视频 + 音效时间点（cues.json）。
 // 用法：NODE_PATH=<装了 puppeteer-core 的 node_modules> node render.cjs <out-dir> [fps] [--preview]
+// 别的宣传片也用这个脚本：ROOT=<静态文件根目录> PAGE=<相对 ROOT 的页面路径>（默认是 companion 的）。
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 const puppeteer = require('puppeteer-core');
 
-const ROOT = path.resolve(__dirname, '..'); // companion/
+const ROOT = path.resolve(process.env.ROOT || path.join(__dirname, '..')); // 默认 companion/
+const PAGE = process.env.PAGE || 'promo/promo.html';
 const OUT = path.resolve(process.argv[2] || '/tmp/minis-promo-out');
 const FPS = Number(process.argv[3]) || 30;
 const PREVIEW = process.argv.includes('--preview'); // 只截几张关键帧，用来检查画面
 const CHROME = process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 
-const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.svg': 'image/svg+xml' };
+const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.svg': 'image/svg+xml', '.jpg': 'image/jpeg', '.png': 'image/png', '.css': 'text/css' };
 const server = http.createServer((req, res) => {
   const file = path.join(ROOT, decodeURIComponent(req.url.split('?')[0]));
   if (!file.startsWith(ROOT) || !fs.existsSync(file)) { res.writeHead(404); return res.end(); }
@@ -23,7 +25,7 @@ const server = http.createServer((req, res) => {
 (async () => {
   fs.mkdirSync(OUT, { recursive: true });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
-  const url = `http://127.0.0.1:${server.address().port}/promo/promo.html?render`;
+  const url = `http://127.0.0.1:${server.address().port}/${PAGE}?render`;
   const browser = await puppeteer.launch({ executablePath: CHROME, headless: true, args: ['--hide-scrollbars', '--force-color-profile=srgb'] });
   const page = await browser.newPage();
   page.on('pageerror', (e) => console.error('page error:', e.message));

@@ -9,22 +9,7 @@
   直接看：在 companion/ 目录起一个本地服务器打开 promo/promo.html。
   出视频：./build.sh（?render 模式下用虚拟时钟逐帧推进，并记录音效时间点）。
 -->
-<script>
-  // 渲染模式：把时间换成虚拟时钟，必须在引擎加载前装好
-  window.RENDER = location.search.includes('render');
-  if (RENDER) {
-    const V = { now: 0, timers: [], raf: [], id: 1 };
-    window.__V = V;
-    performance.now = () => V.now;
-    window.setTimeout = (fn, ms = 0, ...args) => { const id = V.id++; V.timers.push({ id, at: V.now + ms, fn, args }); return id; };
-    window.setInterval = (fn, ms, ...args) => { const id = V.id++; V.timers.push({ id, at: V.now + ms, fn, args, every: Math.max(1, ms) }); return id; };
-    window.clearTimeout = window.clearInterval = (id) => { V.timers = V.timers.filter((t) => t.id !== id); };
-    window.requestAnimationFrame = (fn) => { V.raf.push(fn); return 0; };
-    // 可复现的随机数：同一份分镜，每次渲染都一模一样
-    let seed = 20261012;
-    Math.random = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
-  }
-</script>
+<script src="clock.js"></script>
 <style>
   html, body { margin: 0; background: #fff; }
   body { width: 540px; height: 960px; overflow: hidden; display: block !important; }
@@ -250,42 +235,7 @@
   }
 
   // ── 3. 驱动 ──
-  if (RENDER) {
-    const V = window.__V;
-    const starts = new WeakMap();
-    // CSS 动画 / 过渡也跟着虚拟时钟走
-    const syncCss = () => {
-      for (const a of document.getAnimations()) {
-        if (!starts.has(a)) starts.set(a, V.now - (a.currentTime || 0));
-        a.pause();
-        a.currentTime = V.now - starts.get(a);
-      }
-    };
-    window.__step = (ms) => {
-      const target = V.now + ms;
-      for (;;) {
-        const due = V.timers.filter((x) => x.at <= target).sort((a, b) => a.at - b.at)[0];
-        if (!due) break;
-        V.now = due.at;
-        if (due.every) due.at += due.every; else V.timers = V.timers.filter((x) => x !== due);
-        due.fn(...(due.args || []));
-      }
-      V.now = target;
-      const cbs = V.raf; V.raf = [];
-      cbs.forEach((f) => f(V.now));
-      update(V.now / 1000);
-      syncCss();
-    };
-    window.__duration = DURATION;
-    window.__ready = true;
-  } else {
-    const t0 = performance.now();
-    const loop = (ts) => {
-      update(Math.min(DURATION, (ts - t0) / 1000));
-      requestAnimationFrame(loop);
-    };
-    requestAnimationFrame(loop);
-  }
+  promoRun(update, DURATION);
 })();
 </script>
 </body>

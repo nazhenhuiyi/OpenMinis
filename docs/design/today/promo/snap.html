@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Minis 今日 · 拍一张，就认识它</title>
+<!--
+  场景片 ②「拍一张，就认识它」：认识动植物长在「今日」里——照常拍照，照片自动进时间线，Minis 在照片下面
+  建议「看起来是睡莲」，点「记下」才写进 journal（agent 只在你同意时写）；自己养的还能加个浇水打卡；
+  ⋯ 菜单里翻图鉴；过几天还能问 Minis「上次那种白花叫什么」。
+  拍照识别和图鉴还没做，整支是概念演示（画饼）。照片来自 Unsplash（photos/CREDITS.md），物种和冷知识要和照片对得上。
+  舞台和手机界面在 stage.css / stage.js。直接看：在 docs/design/ 起本地服务器打开 today/promo/snap.html。出视频：./build.sh snap。
+-->
+<script src="../../companion/promo/clock.js"></script>
+<script src="stage.js"></script>
+<link rel="stylesheet" href="stage.css">
+<style>
+  .photos.one { grid-template-columns: 1fr; grid-template-rows: 132px; }
+  .photos.one div:first-child { grid-row: auto; }
+
+  /* 照片下面 Minis 的建议 → 点「记下」之后变成物种标签 */
+  .sug { position: relative; display: flex; align-items: center; gap: 6px; font-size: 13.5px; margin: 2px 0 6px; padding: 7px 10px; border-radius: 12px; background: #EEF2FB; color: #3A4A6A; }
+  .sug .ok { margin-left: auto; color: #fff; background: #4A7FD6; border-radius: 10px; padding: 3px 10px; font-size: 12.5px; font-weight: 600; }
+  .sug .stag { display: none; }
+  .sug.kept { background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.06); display: block; }
+  .sug.kept .ask, .sug.kept .ok { display: none; }
+  .sug.kept .stag { display: block; }
+  .stag .nm { font-size: 14px; font-weight: 600; color: #1B1B1F; }
+  .stag .la { font-size: 12px; color: #80848A; margin-left: 4px; }
+  .stag .sfact { font-size: 12.5px; color: #5F6368; margin-top: 3px; line-height: 18px; }
+  .stag .badge { position: absolute; right: 8px; top: 7px; font-size: 10.5px; font-weight: 800; color: #E0484E; border: 1.5px solid #E0484E; border-radius: 8px; padding: 1px 6px; transform: rotate(-8deg); background: #fff; }
+  .care { display: flex; align-items: center; gap: 8px; margin: -2px 0 8px; font-size: 13px; color: #3A64B8; overflow: hidden; }
+  .care span { background: #fff; border: 1.5px solid #CFDAF2; border-radius: 14px; padding: 5px 12px; }
+
+  /* 相机（只在拍君子兰那一下出现） */
+  .camera { position: absolute; inset: 0; background: #0B0C0E; opacity: 0; }
+  .camera .vf { position: absolute; left: 0; right: 0; top: 74px; height: 536px; background: url(photos/360.jpg) center / cover; }
+  .camera .sh { position: absolute; left: 50%; bottom: 40px; width: 70px; height: 70px; margin-left: -35px; border-radius: 50%; border: 4px solid #fff; box-sizing: border-box; }
+  .camera .sh::after { content: ""; position: absolute; inset: 5px; border-radius: 50%; background: #fff; }
+  #flash { position: absolute; inset: 0; background: #fff; opacity: 0; pointer-events: none; }
+
+  /* ⋯ 菜单 */
+  .menu { position: absolute; right: 10px; top: 76px; width: 196px; background: #fff; border-radius: 14px; box-shadow: 0 10px 30px rgba(0,0,0,.18); padding: 6px 0; opacity: 0; transform-origin: 90% 0; }
+  .menu div { padding: 10px 16px; font-size: 14.5px; }
+  .menu .hi { color: #3A64B8; font-weight: 600; }
+  .snack { position: absolute; left: 50%; bottom: 186px; transform: translateX(-50%); background: rgba(30,30,34,.9); color: #fff; font-size: 13px; padding: 8px 14px; border-radius: 16px; white-space: nowrap; opacity: 0; }
+
+  /* 我的自然图鉴 */
+  .guide { position: absolute; inset: 0; background: #F4F1F7; transform: translateX(100%); }
+  .gbar { height: 50px; display: flex; align-items: center; gap: 12px; padding: 0 16px; font-size: 16px; font-weight: 600; }
+  .gbar span { font-size: 20px; font-weight: 400; }
+  .gsum { margin: 2px 18px 12px; display: flex; align-items: baseline; gap: 8px; }
+  .gsum b { font-size: 30px; font-weight: 800; font-variant-numeric: tabular-nums; }
+  .gsum span { font-size: 13px; color: #5F6368; }
+  .gsum i { margin-left: auto; font-style: normal; font-size: 12.5px; color: #3A64B8; background: #E3EBFA; padding: 4px 10px; border-radius: 12px; }
+  .ggrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; padding: 0 16px; }
+  .gcell { background: #fff; border-radius: 14px; padding: 6px 6px 8px; position: relative; box-shadow: 0 1px 4px rgba(0,0,0,.05); }
+  .gcell .im { height: 92px; border-radius: 10px; background: #E9E6EE center / cover; display: grid; place-items: center; font-size: 26px; color: #B9B5C2; font-weight: 800; }
+  .gcell .nm { font-size: 13px; font-weight: 600; margin-top: 6px; text-align: center; }
+  .gcell .nm.dim { color: #B9B5C2; }
+  .gcell .new { position: absolute; left: 10px; top: 10px; font-size: 10px; font-weight: 800; color: #fff; background: #E0484E; padding: 2px 6px; border-radius: 8px; }
+
+  /* 问问 Minis：回答里带着那张照片 */
+  .rimg { display: flex; gap: 10px; align-items: center; margin-top: 10px; background: #fff; border-radius: 14px; padding: 8px; box-shadow: 0 1px 4px rgba(0,0,0,.06); }
+  .rimg div { width: 64px; height: 64px; border-radius: 10px; background: url(photos/306.jpg) center / cover; flex: none; }
+  .rimg span { font-size: 13px; color: #5F6368; line-height: 19px; }
+</style>
+</head>
+<body class="skin-milk">
+<div id="frame">
+  <div id="washHost"></div>
+  <div id="brand">
+    <svg viewBox="24 62 192 156"><use href="#char"/></svg><b>Minis</b><span>今日 · 认识身边的生命 · 概念演示</span><i id="counter"></i>
+  </div>
+  <div id="titles"><h1 id="title"></h1><p id="sub"></p></div>
+
+  <div id="phone"><div class="screen" id="screen">
+    <div class="sb"><span id="clock">08:28</span><span class="ic">5G ▂▄▆█ ▮</span></div>
+    <div class="hdr">
+      <span class="t">今日</span><span class="d">10月17日周六</span>
+      <span class="chip"><svg id="chipRing" width="20" height="20"></svg><span id="chipText">0/3</span></span>
+      <span class="more" id="moreBtn">···</span>
+    </div>
+    <div class="tl" id="tl"><div class="stack" id="stack">
+      <div class="divider">昨天 · 10月16日周五 · ⛅ 多云 14–21°</div>
+      <div class="meta">22:10</div>
+      <div class="note">这周终于熬过去了，明天去公园走走 🌿</div>
+      <div class="divider">今天 · 10月17日周六 · ☀️ 晴 15–23°</div>
+      <div id="block">
+        <div class="cap" id="blockCap">打卡  ·  0/3</div>
+        <div class="crow"><svg width="17" height="17"></svg>俯卧撑 <span class="p">0/20 个</span></div>
+        <div class="crow"><svg width="17" height="17"></svg>深蹲 <span class="p">0/50 个</span></div>
+        <div class="crow"><svg width="17" height="17"></svg>跑步 <span class="p">0/3 公里</span></div>
+        <div class="grow" id="waterRow" style="max-height:0"><div class="crow"><svg width="17" height="17"></svg>给君子兰浇水 <span class="p">每 7 天</span></div></div>
+      </div>
+      <div id="entries"></div>
+    </div></div>
+    <div class="composer" id="composer">
+      <div class="in"><span class="ph">写点什么…</span></div>
+      <div class="rbtn cam" id="camBtn">📷</div><div class="rbtn send">↑</div>
+    </div>
+    <div class="tabs"><div class="sel" id="tabToday">今日</div><div id="tabChat">聊天</div></div>
+    <div class="snack" id="toast">已加到打卡 · 每 7 天提醒浇水</div>
+
+    <div class="menu" id="menu">
+      <div>记录位置</div><div>显示天气</div><div>天气提醒</div><div>每日打卡</div><div class="hi" id="menuGuide">🌿 我的自然图鉴</div>
+    </div>
+    <div class="guide" id="guide">
+      <div class="sb"><span>21:30</span><span class="ic">5G ▂▄▆█ ▮</span></div>
+      <div class="gbar"><span>‹</span>我的自然图鉴</div>
+      <div class="gsum"><b id="gN">35</b><span>种 · 已收集</span><i>今天 +7</i></div>
+      <div class="ggrid" id="ggrid"></div>
+    </div>
+    <div class="chat" id="chat">
+      <div class="cbar"><span>←</span>问问 Minis</div>
+      <div class="askb" id="ask">上次在公园看到的那种白花叫什么？</div>
+      <div class="reply" id="reply"><div class="who">✦ Minis</div><span id="replyText"></span>
+        <div class="rimg" id="rimg"><div></div><span>10月17日 10:40 · 公园<br>🪷 睡莲 · 你的图鉴第 38 种</span></div>
+      </div>
+      <div class="composer"><div class="in"><span class="ph">发消息给 Minis</span></div><div class="rbtn cam">＋</div><div class="rbtn send">↑</div></div>
+    </div>
+
+    <div class="camera" id="camLayer"><div class="sb" style="color:#fff"><span>08:30</span><span class="ic">5G ▂▄▆█ ▮</span></div><div class="vf"></div><div class="sh" id="shutter"></div></div>
+    <div id="flash"></div>
+  </div></div>
+
+  <div id="charHost"></div>
+  <div id="end">
+    <div class="name">Minis 今日</div>
+    <div class="tag">拍一张，就认识了身边的它</div>
+    <div class="small">MINIS · TODAY</div>
+  </div>
+  <div id="ripple"></div>
+  <div id="finger"></div>
+  <div id="fade"></div>
+</div>
+<div id="proto"></div>
+
+<script>
+(async () => {
+  const { $, clamp, smooth, ease, backOut, cue } = Stage;
+  const M = await Stage.load();
+
+  // 这个周六拍到的七种：时间地点、照片、Minis 认出的物种、一个冷知识
+  const SPECIES = [
+    { id: '360', meta: '08:30 · 家', emo: '🌸', nm: '君子兰', la: 'Clivia miniata', fx: '喜欢散射光，开花时别挪盆，花会歪', n: 36 },
+    { id: '239', meta: '10:15 · 公园', emo: '🌼', nm: '蒲公英', la: 'Taraxacum', fx: '一朵绒球上有上百颗种子，靠风飘到很远', n: 37 },
+    { id: '306', meta: '10:40 · 公园', emo: '🪷', nm: '睡莲', la: 'Nymphaea', fx: '白天开花，傍晚花瓣合起来，所以叫「睡」莲', n: 38 },
+    { id: '1025', meta: '11:20 · 公园', emo: '🐶', nm: '巴哥犬', la: 'Pug', fx: '鼻子短、怕热，夏天别在中午遛它', n: 39 },
+    { id: '1069', meta: '14:30 · 海洋馆', emo: '🪼', nm: '海刺水母', la: 'Chrysaora', fx: '九成五以上是水，没有大脑和心脏', n: 40 },
+    { id: '1084', meta: '15:20 · 海洋馆', emo: '🦭', nm: '海象', la: 'Odobenus rosmarus', fx: '长牙能长到近一米，用来把自己撑上冰面', n: 41 },
+    { id: '248', meta: '20:30 · 家', emo: '🌵', nm: '仙人球', la: '仙人掌科', fx: '冬天几乎不用浇水，浇多了会烂根', n: 42 },
+  ];
+  $('entries').innerHTML = SPECIES.map((s, i) => `<div class="grow" data-e="${i}" style="max-height:0">
+      <div class="meta">${s.meta}</div>
+      <div class="photos one"><div style="background-image:url(photos/${s.id}.jpg)"></div></div>
+      <div class="sug" data-s="${i}"><span class="ask">✦ 看起来是 <b>${s.nm}</b></span><span class="ok">记下</span>
+        <div class="stag"><span class="nm">${s.emo} ${s.nm}</span><span class="la">${s.la}</span><div class="sfact">${s.fx}</div><span class="badge">新收集 · 第 ${s.n} 种</span></div></div>
+      ${i === 0 ? '<div class="grow care" id="care" style="max-height:0"><span>＋ 每 7 天提醒浇水</span></div>' : ''}
+    </div>`).join('');
+  const ent = (i) => document.querySelector(`[data-e="${i}"]`);
+  const sug = (i) => document.querySelector(`[data-s="${i}"]`);
+
+  // 图鉴：今天的七种排在最前，后面是以前收集的，再后面是还没遇到的
+  const OLD = [['244', '褐鹈鹕'], ['200', '高地牛']];
+  $('ggrid').innerHTML = [
+    ...SPECIES.map((x) => `<div class="gcell"><div class="im" style="background-image:url(photos/${x.id}.jpg)"></div><div class="nm">${x.nm}</div><span class="new">NEW</span></div>`),
+    ...OLD.map(([id, nm]) => `<div class="gcell"><div class="im" style="background-image:url(photos/${id}.jpg)"></div><div class="nm">${nm}</div></div>`),
+    ...Array.from({ length: 3 }, () => '<div class="gcell"><div class="im">?</div><div class="nm dim">还没遇到</div></div>'),
+  ].join('');
+  const cells = [...document.querySelectorAll('.gcell')];
+
+  // ── 时间表 ──
+  const T = {
+    cam: 3.6, shoot: 4.6, back: 5.0,            // 拍君子兰
+    sug0: 6.0, keep0: 7.0, care: 7.6, water: 8.6, // 认出来、记下、加浇水打卡
+    walk: 10.6, every: 1.65,                     // 出门：后面六种一组组长出来
+    menu: 21.2, guide: 21.9,                     // 打开图鉴
+    chat: 26.6, ask: 27.1, reply: 27.8,          // 问问 Minis
+    end: 32.4,
+  };
+  const DURATION = T.end + 4.6;
+  const walkAt = (i) => T.walk + (i - 1) * T.every; // 第 i 种（1..6）长出来的时间
+  const REPLY = '是睡莲 🪷，你 10月17日上午在公园拍的。它白天开花、傍晚合上，想再看的话上午去哦。';
+  const STREAM = { from: T.reply, every: 0.04 };
+
+  const SCENES = [
+    { t: 0, title: '拍一张，就认识它', sub: '照片还在「今日」里，Minis 帮你认出来' },
+    { t: 3.0, title: '阳台的君子兰开了', sub: '照常拍照，照片自动出现在今天' },
+    { t: 5.9, title: 'Minis 认出了它', sub: '点「记下」才写进日记；自己养的，还能加个浇水打卡' },
+    { t: T.walk - 0.2, title: '出门走走，一路都在认识', sub: '公园、海洋馆……每一张照片，它都认得' },
+    { t: T.menu - 0.3, title: '今天认识了 7 种', sub: '认过的都收在图鉴里，已经 42 种了' },
+    { t: T.chat - 0.2, title: '过几天，问问 Minis', sub: '「上次在公园看到的那种白花叫什么？」' },
+    { t: T.end - 0.2, title: '', sub: '', end: true },
+  ];
+
+  const TAPS = [
+    [T.cam, () => $('camBtn')], [T.shoot, () => $('shutter')],
+    [T.keep0, () => sug(0).querySelector('.ok')], [T.care, () => $('care').querySelector('span')],
+    ...SPECIES.slice(1).map((_, k) => [walkAt(k + 1) + 0.9, () => sug(k + 1).querySelector('.ok')]),
+    [T.menu, () => $('moreBtn')], [T.guide - 0.1, () => $('menuGuide')],
+    [T.chat, () => $('tabChat')],
+  ];
+  const ACTIONS = [
+    [0.4, () => cue('open')],
+    [T.shoot + 0.03, () => cue('shutter')],
+    [T.back + 0.3, () => cue('photo')],
+    [T.sug0, () => cue('suggest')],
+    [T.keep0 + 0.05, () => cue('stamp', { i: 0 })],
+    [T.care + 0.05, () => cue('habit')],
+    ...SPECIES.slice(1).flatMap((_, k) => [
+      [walkAt(k + 1), () => cue('photo')],
+      [walkAt(k + 1) + 0.45, () => cue('suggest')],
+      [walkAt(k + 1) + 0.95, () => cue('stamp', { i: k + 1 })],
+    ]),
+    [T.menu + 0.05, () => cue('menu')],
+    [T.guide, () => cue('swipe')],
+    ...SPECIES.map((_, i) => [T.guide + 0.5 + i * 0.16, () => cue('item', { i })]),
+    [T.chat + 0.05, () => cue('swipe')],
+    [T.ask, () => cue('ask')],
+    [STREAM.from, () => cue('stream', { until: STREAM.from + [...REPLY].length * STREAM.every })],
+  ];
+
+  // 打卡圈：和功能巡礼一样画法
+  const PRIMARY = '#4A7FD6', TRACK = '#C9C6CF';
+  function ring(svg, frac, done) {
+    const s = +svg.getAttribute('width'), w = s > 20 ? 2 : 1.8, r = (s - w) / 2, c = 2 * Math.PI * r;
+    svg.innerHTML = `<circle cx="${s / 2}" cy="${s / 2}" r="${r}" fill="none" stroke="${TRACK}" stroke-width="${w}"/>` +
+      (frac > 0 ? `<circle cx="${s / 2}" cy="${s / 2}" r="${r}" fill="none" stroke="${PRIMARY}" stroke-width="${w}" stroke-dasharray="${c * frac} ${c}" transform="rotate(-90 ${s / 2} ${s / 2})"/>` : '') +
+      (done ? `<circle cx="${s / 2}" cy="${s / 2}" r="${s / 2}" fill="${PRIMARY}"/>` : '');
+  }
+  document.querySelectorAll('.crow svg').forEach((svg) => ring(svg, 0, false));
+  ring($('chipRing'), 0, false);
+
+  const grow = (el, k) => { el.style.maxHeight = (el.scrollHeight * k).toFixed(1) + 'px'; el.style.opacity = k.toFixed(3); };
+  const CLOCKS = [[0, '08:28'], [T.back, '08:30'], ...SPECIES.slice(1).map((s, k) => [walkAt(k + 1), s.meta.slice(0, 5)]), [T.menu - 0.3, '21:30'], [T.chat, '12:10']];
+
+  function update(t) {
+    // 手机：开场浮上来，片尾让位给小团子
+    const enter = ease((t - 0.3) / 1.0), leave = smooth(T.end - 0.6, T.end, t);
+    $('phone').style.opacity = (smooth(0.3, 0.9, t) * (1 - leave)).toFixed(3);
+    $('phone').style.transform = `translateY(${((1 - enter) * 80 + leave * 40).toFixed(1)}px) scale(${(0.84 - leave * 0.06).toFixed(4)})`;
+    $('clock').textContent = CLOCKS.filter(([at]) => t >= at).at(-1)[1];
+
+    // 拍君子兰：相机打开、快门一闪，回到时间线
+    const camK = smooth(T.cam + 0.1, T.cam + 0.4, t) * (1 - smooth(T.back, T.back + 0.3, t));
+    $('camLayer').style.opacity = camK.toFixed(3);
+    $('flash').style.opacity = (smooth(T.shoot, T.shoot + 0.04, t) * (1 - smooth(T.shoot + 0.06, T.shoot + 0.3, t)) * 0.9).toFixed(3);
+
+    // 照片一组组长进时间线，下面冒出 Minis 的建议，点「记下」变成物种标签 + 新收集
+    SPECIES.forEach((s, i) => {
+      const appear = i === 0 ? T.back + 0.3 : walkAt(i);
+      const sugAt = i === 0 ? T.sug0 : walkAt(i) + 0.45;
+      const keepAt = i === 0 ? T.keep0 : walkAt(i) + 0.95;
+      grow(ent(i), ease((t - appear) / 0.5));
+      const el = sug(i);
+      el.style.opacity = smooth(sugAt, sugAt + 0.25, t).toFixed(3);
+      el.style.transform = `translateY(${((1 - ease((t - sugAt) / 0.3)) * 8).toFixed(1)}px)`;
+      el.classList.toggle('kept', t >= keepAt);
+      const b = el.querySelector('.badge');
+      const bk = clamp((t - keepAt) / 0.22);
+      b.style.transform = `rotate(-8deg) scale(${(bk <= 0 ? 0 : 1.8 - 0.8 * ease(bk)).toFixed(3)})`;
+      b.style.opacity = clamp(bk * 3).toFixed(3);
+    });
+    // 君子兰是自己养的：加个浇水打卡
+    grow($('care'), ease((t - (T.keep0 + 0.25)) / 0.3) * (1 - smooth(T.water + 0.4, T.water + 0.8, t)));
+    grow($('waterRow'), ease((t - T.water) / 0.4));
+    $('waterRow').style.background = t > T.water && t < T.water + 1.2 ? `rgba(74,127,214,${(0.15 * (1 - smooth(T.water + 0.4, T.water + 1.2, t))).toFixed(3)})` : '';
+    const nH = t >= T.water ? 4 : 3;
+    $('blockCap').textContent = `打卡  ·  0/${nH}`;
+    $('chipText').textContent = `0/${nH}`;
+    $('toast').style.opacity = (smooth(T.care + 0.1, T.care + 0.3, t) * (1 - smooth(T.care + 1.6, T.care + 1.9, t))).toFixed(3);
+
+    // ⋯ 菜单 → 图鉴
+    const mk = backOut((t - T.menu - 0.05) / 0.25) * (1 - smooth(T.guide, T.guide + 0.15, t));
+    $('menu').style.opacity = clamp(mk * 2).toFixed(3);
+    $('menu').style.transform = `scale(${(0.9 + 0.1 * clamp(mk)).toFixed(3)})`;
+    const gk = ease((t - T.guide) / 0.45) * (1 - smooth(T.chat - 0.1, T.chat + 0.1, t));
+    $('guide').style.transform = `translateX(${((1 - gk) * 100).toFixed(2)}%)`;
+    cells.forEach((el, j) => {
+      const k = j < 7 ? backOut((t - T.guide - 0.5 - j * 0.16) / 0.4) : 1;
+      el.style.opacity = j < 7 ? clamp(k * 2).toFixed(3) : '';
+      el.style.transform = j < 7 ? `scale(${(0.8 + 0.2 * k).toFixed(3)})` : '';
+    });
+    $('gN').textContent = 35 + Math.round(7 * clamp((t - T.guide - 0.5) / (7 * 0.16 + 0.3)));
+
+    // 问问 Minis
+    const ck = ease((t - T.chat - 0.05) / 0.45);
+    $('chat').style.transform = `translateX(${((1 - ck) * 100).toFixed(2)}%)`;
+    $('tabChat').classList.toggle('sel', t >= T.chat);
+    $('tabToday').classList.toggle('sel', t < T.chat);
+    $('ask').style.opacity = smooth(T.ask, T.ask + 0.2, t);
+    $('reply').style.opacity = smooth(T.reply - 0.2, T.reply, t);
+    const m = clamp(Math.floor((t - STREAM.from) / STREAM.every), 0, [...REPLY].length);
+    $('replyText').textContent = [...REPLY].slice(0, m).join('');
+    const ik = backOut((t - (STREAM.from + [...REPLY].length * STREAM.every)) / 0.4);
+    $('rimg').style.opacity = clamp(ik * 2).toFixed(3);
+    $('rimg').style.transform = `translateY(${((1 - clamp(ik)) * 10).toFixed(1)}px)`;
+  }
+
+  Stage.run({ M, duration: DURATION, scenes: SCENES, actions: ACTIONS, taps: TAPS, update, ending: { at: T.end } });
+})();
+</script>
+</body>
+</html>
