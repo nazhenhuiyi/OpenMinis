@@ -1,6 +1,6 @@
 # 识别模型和物种名单的生成脚本（SPEC §17）
 
-产物（都不进仓库，体积太大）：`bioclip2_img_w8a16.onnx` + `.data`（骁龙 NPU；App 只用 NPU）、`species.bin`、`species.tsv`、`species_prior.bin`（可选）。中间数据都在 `/tmp/bc-data/`。
+产物（都不进仓库，体积太大；发布在 GitHub Release [`species-model-v1`](https://github.com/nazhenhuiyi/OpenMinis/releases/tag/species-model-v1)，说明里有 SHA-256。更新时发新的 release）：`bioclip2_img_w8a16.onnx` + `.data`（骁龙 NPU；App 只用 NPU）、`species.bin`、`species.tsv`、`species_prior.bin`（可选）。中间数据都在 `/tmp/bc-data/`。
 
 环境：Python 3 + `pip install pybioclip onnx onnxruntime onnxscript`（`export.py`、`quant.py`、`qdq.py`、`fill.py`、`sim.py` 用这个环境；抓数据的脚本只用标准库）。
 

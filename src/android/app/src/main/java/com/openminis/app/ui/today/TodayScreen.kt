@@ -230,10 +230,8 @@ fun TodayScreen(
                 )
                 TodayViewModel.Event.NeedNotificationPermission ->
                     if (Build.VERSION.SDK_INT >= 33) notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                is TodayViewModel.Event.Collected -> {
-                    haptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                    collected = e
-                }
+                // The reveal does its own haptics, on the stamp.
+                is TodayViewModel.Event.Collected -> collected = e
                 TodayViewModel.Event.AllHabitsDone -> {
                     haptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                     Toast.makeText(context, R.string.today_habits_all_done, Toast.LENGTH_SHORT).show()
@@ -401,14 +399,13 @@ fun TodayScreen(
                 onSend = vm::send,
             )
         }
-        // Just recorded a species (§17.2): rises above the composer for a moment.
-        CollectedBanner(
+        SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).imePadding().padding(bottom = 104.dp))
+        // Just recorded a species (§17.2): the card is dealt over everything.
+        NewSpeciesReveal(
             event = collected,
             onOpen = { latin -> collected = null; nature = latin; showNature = true },
             onGone = { collected = null },
-            modifier = Modifier.align(Alignment.BottomCenter).imePadding().padding(bottom = 112.dp),
         )
-        SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).imePadding().padding(bottom = 104.dp))
       }
     }
 

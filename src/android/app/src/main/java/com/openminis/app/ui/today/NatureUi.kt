@@ -1,5 +1,35 @@
 package com.openminis.app.ui.today
 
+import android.os.Build
+import android.view.HapticFeedbackConstants
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.text.style.TextAlign
+import kotlinx.coroutines.launch
+import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.sin
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.scaleOut
+import androidx.compose.ui.graphics.Path
+import com.openminis.app.ui.components.MinisMochi
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.animation.core.MutableTransitionState
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
@@ -739,46 +769,353 @@ private fun RegionCrop(photo: CameraPhoto, region: SpeciesId.Region?, modifier: 
 // ───────────────────────── After recording (§17.2) ─────────────────────────
 
 /**
- * Rises from the bottom for a moment: "New to your collection · No. 12" with
- * a bouncing emoji, or "Seen again · 3 times". Tap to open that species.
+ * Every time something goes into the collection (§17.2), a card is dealt:
+ * the screen dims; the card rises face down and flips over to the photo;
+ * on landing "No.12" (or "×3" when seen again) is slammed on with a thud,
+ * the card shakes, a shockwave and a burst of leaves and petals go out, and
+ * a shine runs across the photo. Then the name rises letter by letter and
+ * the card floats among twinkling stars. A new kind says "New species"; the
+ * first one ever, the first of a group (first bird) and round numbers
+ * (10, 50, 100…) get a line of their own. Tap anywhere to go on; "Take a
+ * look" opens the species. The Minis mochi pops up by the card and cheers
+ * (the companion's "done", docs/design/companion).
  */
 @Composable
-internal fun CollectedBanner(event: TodayViewModel.Event.Collected?, onOpen: (String) -> Unit, onGone: () -> Unit, modifier: Modifier = Modifier) {
+internal fun NewSpeciesReveal(event: TodayViewModel.Event.Collected?, onOpen: (String) -> Unit, onGone: () -> Unit) {
     var last by remember { mutableStateOf(event) }
     if (event != null) last = event
-    LaunchedEffect(event) { if (event != null) { delay(3200); onGone() } }
+    // Its own full-screen window, over the tab bar and the system bars; kept until the fade-out ends.
+    val shown = remember { MutableTransitionState(false) }
+    shown.targetState = event != null
+    if (!shown.currentState && !shown.targetState) return
+    Dialog(onDismissRequest = onGone, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+    val window = (LocalView.current.parent as? DialogWindowProvider)?.window
+    val dialogView = LocalView.current
+    LaunchedEffect(window) {
+        window?.setDimAmount(0f)
+        window?.let { WindowCompat.getInsetsController(it, dialogView).apply { isAppearanceLightStatusBars = false; isAppearanceLightNavigationBars = false } }
+    }
     AnimatedVisibility(
-        visible = event != null,
-        enter = slideInVertically(spring(dampingRatio = 0.7f, stiffness = Spring.StiffnessMediumLow)) { it } + fadeIn(),
-        exit = slideOutVertically(tween(250)) { it } + fadeOut(),
-        modifier = modifier,
+        shown,
+        enter = fadeIn(tween(280)),
+        exit = fadeOut(tween(240)) + scaleOut(tween(240), targetScale = 0.9f),
     ) {
         val e = last ?: return@AnimatedVisibility
-        val pop = remember { Animatable(0.3f) }
-        LaunchedEffect(e) { pop.snapTo(0.3f); pop.animateTo(1f, spring(dampingRatio = 0.35f, stiffness = Spring.StiffnessLow)) }
-        Surface(
-            shape = RoundedCornerShape(20.dp),
-            color = Leaf,
-            shadowElevation = 8.dp,
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp).fillMaxWidth().clip(RoundedCornerShape(20.dp))
-                .clickable { onOpen(e.latin) }.testTag("today_collected_banner"),
-        ) {
-            Row(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(44.dp).clip(CircleShape).background(Color(0x33FFFFFF)), contentAlignment = Alignment.Center) {
-                    Text(TodayViewModel.speciesEmoji(e.group), fontSize = 24.sp, modifier = Modifier.scale(pop.value))
-                }
-                Spacer(Modifier.width(12.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        if (e.isNew) stringResource(R.string.today_collected_new, e.number) else stringResource(R.string.today_collected_again, e.times),
-                        color = Color.White.copy(alpha = 0.85f),
-                        fontSize = 12.sp,
-                    )
-                    Text(speciesName(e.name, e.latin), color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
-                }
-                Text(stringResource(R.string.today_collected_total, e.total), color = Color.White.copy(alpha = 0.85f), fontSize = 12.sp)
+        val view = LocalView.current
+        val rise = remember(e) { Animatable(0f) }    // from below to the middle
+        val flip = remember(e) { Animatable(0f) }    // face down → face up
+        val stamp = remember(e) { Animatable(0f) }   // the number slammed on
+        val shake = remember(e) { Animatable(0f) }   // 1 at impact, dying away
+        val wave = remember(e) { Animatable(0f) }    // shockwave and burst, 0 → 1
+        val shine = remember(e) { Animatable(0f) }   // light across the photo
+        val words = remember(e) { Animatable(0f) }   // title, name and the rest
+        val pill = remember(e) { Animatable(0f) }
+        val mochi = remember(e) { Animatable(0f) }   // Minis pops up by the card to cheer
+        var cheer by remember(e) { mutableIntStateOf(0) }
+        LaunchedEffect(e) {
+            delay(180) // the sheet it came from slides away first
+            launch { rise.animateTo(1f, spring(dampingRatio = 0.72f, stiffness = 260f)) }
+            delay(260)
+            view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+            flip.animateTo(1f, tween(560, easing = FastOutSlowInEasing))
+            // Impact.
+            view.performHapticFeedback(if (Build.VERSION.SDK_INT >= 30) HapticFeedbackConstants.CONFIRM else HapticFeedbackConstants.LONG_PRESS)
+            launch { stamp.animateTo(1f, spring(dampingRatio = 0.42f, stiffness = 700f)) }
+            launch { delay(90); cheer++; mochi.animateTo(1f, spring(dampingRatio = 0.5f, stiffness = 420f)) }
+            launch { shake.snapTo(1f); shake.animateTo(0f, tween(520, easing = LinearEasing)) }
+            launch { wave.animateTo(1f, tween(1900, easing = LinearEasing)) }
+            launch { delay(120); shine.animateTo(1f, tween(750, easing = FastOutSlowInEasing)) }
+            launch { delay(140); words.animateTo(1f, tween(700, easing = LinearEasing)) }
+            delay(620)
+            if (e.isNew && special(e)) {
+                view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                pill.animateTo(1f, spring(dampingRatio = 0.5f, stiffness = 500f))
             }
         }
+        val idle = rememberInfiniteTransition(label = "idle")
+        val spin by idle.animateFloat(0f, 360f, infiniteRepeatable(tween(30000, easing = LinearEasing)), label = "spin")
+        val breathe by idle.animateFloat(0f, 1f, infiniteRepeatable(tween(2600, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "breathe")
+        val twinkle by idle.animateFloat(0f, 1f, infiniteRepeatable(tween(4000, easing = LinearEasing)), label = "twinkle")
+        val special = when {
+            !e.isNew -> null
+            e.number == 1 -> stringResource(R.string.today_reveal_first)
+            e.number in MILESTONES -> stringResource(R.string.today_reveal_milestone, e.number)
+            e.firstOfGroup -> stringResource(R.string.today_reveal_first_group, groupLabel(e.group))
+            else -> null
+        }
+        val title = "✦ " + (if (e.isNew) stringResource(R.string.today_reveal_title) else stringResource(R.string.today_collected_again, e.times)) + " ✦"
+        val landed = stamp.value.coerceIn(0f, 1f)
+        Box(
+            Modifier.fillMaxSize()
+                .background(Brush.radialGradient(listOf(Color(0xF21A2E21), Color(0xFF070C09))))
+                .clickable(interactionSource = null, indication = null, onClick = onGone)
+                .testTag("today_new_species"),
+            contentAlignment = Alignment.Center,
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(horizontal = 28.dp)) {
+                // The title comes in a letter at a time.
+                Row {
+                    title.forEachIndexed { i, ch ->
+                        val t = ((words.value * 1.8f - i * 0.06f)).coerceIn(0f, 1f)
+                        Text(
+                            ch.toString(),
+                            color = LeafGlow,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            letterSpacing = 3.sp,
+                            modifier = Modifier.graphicsLayer { alpha = t; translationY = (1f - t) * 10.dp.toPx() },
+                        )
+                    }
+                }
+                Spacer(Modifier.height(18.dp))
+                Box(contentAlignment = Alignment.Center) {
+                    Canvas(Modifier.size(440.dp)) {
+                        val glow = landed * (0.75f + 0.25f * breathe)
+                        // Soft glow and slow rays behind the card.
+                        drawCircle(Brush.radialGradient(listOf(LeafGlow.copy(alpha = 0.35f * glow), Color.Transparent), center, size.minDimension * 0.46f))
+                        rotate(spin) {
+                            for (i in 0 until 14) rotate(i * 360f / 14) {
+                                drawArc(
+                                    Brush.radialGradient(listOf(LeafGlow.copy(alpha = 0.18f * glow), Color.Transparent), center, size.minDimension / 2),
+                                    startAngle = -5f, sweepAngle = 10f, useCenter = true,
+                                )
+                            }
+                        }
+                        // The shockwave on impact.
+                        val w = wave.value
+                        if (w in 0.001f..0.5f) {
+                            val k = w / 0.5f
+                            drawCircle(
+                                LeafGlow.copy(alpha = 0.7f * (1f - k)),
+                                radius = 120.dp.toPx() + k * 110.dp.toPx(),
+                                style = Stroke(width = (10f * (1f - k) + 1f).dp.toPx()),
+                            )
+                        }
+                        drawSparkles(landed, twinkle, e.latin.hashCode())
+                        drawConfetti(w, e.latin.hashCode())
+                    }
+                    val shakeAngle = sin(shake.value * 26f) * shake.value * 5f
+                    Box(
+                        Modifier.width(236.dp).aspectRatio(0.8f)
+                            .graphicsLayer {
+                                val r = rise.value
+                                translationY = (1f - r) * 560.dp.toPx() + landed * sin(breathe * PI.toFloat()) * -6.dp.toPx()
+                                rotationY = 180f * (1f - flip.value)
+                                rotationZ = -10f * (1f - r) - 3f * landed + shakeAngle
+                                val sc = 0.7f + 0.3f * r + 0.06f * shake.value
+                                scaleX = sc
+                                scaleY = sc
+                                cameraDistance = 16f * density
+                            },
+                    ) {
+                        if (flip.value < 0.5f) CardBack(e.group)
+                        else CardFace(e, stamp.value, shine.value)
+                    }
+                    // Minis, peeking out at the card's lower left, jumps and cheers.
+                    MinisMochi(
+                        cheer = cheer,
+                        modifier = Modifier.size(112.dp).offset(x = (-112).dp, y = 118.dp)
+                            .graphicsLayer {
+                                val m = mochi.value
+                                alpha = m.coerceIn(0f, 1f)
+                                scaleX = m
+                                scaleY = m
+                                translationY = (1f - m.coerceIn(0f, 1f)) * 40.dp.toPx()
+                                transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0.5f, 1f)
+                            },
+                    )
+                }
+                Spacer(Modifier.height(20.dp))
+                val nameIn = ((words.value - 0.15f) / 0.5f).coerceIn(0f, 1f)
+                Text(
+                    speciesName(e.name, e.latin),
+                    color = Color.White,
+                    fontSize = 27.sp,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.graphicsLayer {
+                        alpha = nameIn
+                        translationY = (1f - nameIn) * 28.dp.toPx()
+                        scaleX = 0.85f + 0.15f * nameIn
+                        scaleY = 0.85f + 0.15f * nameIn
+                    },
+                )
+                val latinIn = ((words.value - 0.35f) / 0.4f).coerceIn(0f, 1f)
+                Text(
+                    e.latin,
+                    color = Color.White.copy(alpha = 0.65f),
+                    fontSize = 14.sp,
+                    fontStyle = FontStyle.Italic,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.graphicsLayer { alpha = latinIn; translationY = (1f - latinIn) * 12.dp.toPx() },
+                )
+                if (special != null) {
+                    Spacer(Modifier.height(14.dp))
+                    Text(
+                        "🎉 $special",
+                        color = Color(0xFF1B2E20),
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier
+                            .graphicsLayer { alpha = pill.value.coerceIn(0f, 1f); scaleX = pill.value; scaleY = pill.value }
+                            .clip(RoundedCornerShape(50)).background(Brush.horizontalGradient(listOf(LeafGlow, Color(0xFFFFE08A))))
+                            .padding(horizontal = 14.dp, vertical = 6.dp),
+                    )
+                }
+                Spacer(Modifier.height(24.dp))
+                val buttonIn = ((words.value - 0.6f) / 0.4f).coerceIn(0f, 1f)
+                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.graphicsLayer { alpha = buttonIn }) {
+                    Button(
+                        onClick = { onOpen(e.latin) },
+                        enabled = buttonIn > 0f,
+                        colors = ButtonDefaults.buttonColors(containerColor = Leaf),
+                        modifier = Modifier.testTag("today_new_species_open"),
+                    ) { Text(stringResource(R.string.today_reveal_open)) }
+                    Spacer(Modifier.height(10.dp))
+                    Text(stringResource(R.string.today_reveal_continue), color = Color.White.copy(alpha = 0.45f), fontSize = 12.sp)
+                }
+            }
+        }
+    }
+    }
+}
+
+/** Whether the reveal has a line of its own for this one. */
+private fun special(e: TodayViewModel.Event.Collected) = e.number == 1 || e.number in MILESTONES || e.firstOfGroup
+
+/** The card face down: green, with the kind's emoji and a question mark (turned so it reads while the card is past halfway). */
+@Composable
+private fun CardBack(group: String?) {
+    Box(
+        Modifier.fillMaxSize().graphicsLayer { rotationY = 180f }.shadow(18.dp, RoundedCornerShape(22.dp)).clip(RoundedCornerShape(22.dp))
+            .background(Brush.linearGradient(listOf(Color(0xFF4E9A61), Color(0xFF2C5E39))))
+            .padding(10.dp).border(1.5.dp, LeafGlow.copy(alpha = 0.6f), RoundedCornerShape(16.dp)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(TodayViewModel.speciesEmoji(group), fontSize = 56.sp)
+            Text("?", color = LeafGlow, fontSize = 28.sp, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+/** The card face up: the photo in a white frame, the stamp, the emoji, and a passing shine. */
+@Composable
+private fun CardFace(e: TodayViewModel.Event.Collected, stamp: Float, shine: Float) {
+    Box(
+        Modifier.fillMaxSize()
+            .shadow(22.dp, RoundedCornerShape(22.dp)).clip(RoundedCornerShape(22.dp)).background(Color.White).padding(6.dp)
+            .clip(RoundedCornerShape(17.dp)),
+    ) {
+        PhotoImage(e.photo, Modifier.fillMaxSize(), size = 700, fallback = TodayViewModel.speciesEmoji(e.group))
+        if (shine in 0.001f..0.999f) {
+            Canvas(Modifier.fillMaxSize()) {
+                val x = -size.width + shine * size.width * 3f
+                drawRect(
+                    Brush.linearGradient(
+                        0f to Color.Transparent, 0.5f to Color.White.copy(alpha = 0.55f), 1f to Color.Transparent,
+                        start = Offset(x - 80f, 0f), end = Offset(x + 80f, size.height * 0.4f),
+                    ),
+                )
+            }
+        }
+        Text(
+            if (e.isNew) "No.${e.number}" else "×${e.times}",
+            color = Color.White,
+            fontSize = 17.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(12.dp)
+                .graphicsLayer {
+                    alpha = (stamp * 2f).coerceIn(0f, 1f)
+                    val sc = 2.2f - 1.2f * stamp
+                    scaleX = sc
+                    scaleY = sc
+                    rotationZ = -8f
+                }
+                .shadow(6.dp, RoundedCornerShape(8.dp))
+                .clip(RoundedCornerShape(8.dp)).background(Leaf)
+                .border(1.5.dp, Color.White.copy(alpha = 0.7f), RoundedCornerShape(8.dp))
+                .padding(horizontal = 10.dp, vertical = 4.dp),
+        )
+        Box(
+            Modifier.align(Alignment.BottomEnd).padding(10.dp)
+                .graphicsLayer { val t = stamp.coerceIn(0f, 1f); alpha = t; scaleX = t; scaleY = t }
+                .size(42.dp).clip(CircleShape).background(Color(0xE6FFFFFF)),
+            contentAlignment = Alignment.Center,
+        ) { Text(TodayViewModel.speciesEmoji(e.group), fontSize = 22.sp) }
+    }
+}
+
+/** Round numbers worth a line of their own on the reveal. */
+private val MILESTONES = setOf(10, 25, 50, 100, 150, 200, 300, 500, 1000)
+
+private val LeafGlow = Color(0xFFA8E6B4)
+private val ConfettiColors = listOf(Color(0xFFA8E6B4), Color(0xFF6CC27E), Color(0xFFFFD86B), Color(0xFFFFFFFF), Color(0xFFFF9E80), Color(0xFF8FD3FF), Color(0xFFFFB3D1))
+
+/**
+ * Leaves, petals and streamers thrown out from behind the card, fluttering
+ * as they fall and fade; each leaves a little after the one before. [t] runs 0 → 1.
+ */
+private fun DrawScope.drawConfetti(t: Float, seed: Int) {
+    if (t <= 0f || t >= 1f) return
+    val rnd = java.util.Random(seed.toLong())
+    val reach = size.minDimension * 0.7f
+    repeat(90) {
+        val angle = rnd.nextFloat() * 2f * PI.toFloat()
+        val speed = 0.35f + rnd.nextFloat() * 0.65f
+        val color = ConfettiColors[rnd.nextInt(ConfettiColors.size)]
+        val depth = 0.6f + rnd.nextFloat() * 0.8f
+        val w = (6f + rnd.nextFloat() * 6f) * depth * density / 2.5f
+        val spinRate = (rnd.nextFloat() - 0.5f) * 1080f
+        val kind = rnd.nextInt(3)
+        val start = rnd.nextFloat() * 0.18f
+        val sway = rnd.nextFloat() * 2f * PI.toFloat()
+        val p = ((t - start) / (1f - start)).coerceIn(0f, 1f)
+        if (p <= 0f) return@repeat
+        // Fast out, then slow; gravity and a side-to-side flutter take over.
+        val out = 1f - (1f - p) * (1f - p) * (1f - p)
+        val x = center.x + cos(angle) * reach * speed * out + sin(p * 9f + sway) * 14f * density * p
+        val y = center.y + sin(angle) * reach * speed * out + p * p * reach * 0.5f
+        val a = if (p < 0.65f) 1f else (1f - p) / 0.35f
+        // Turning over: the width narrows and widens like a flake catching the light.
+        val turn = 0.35f + 0.65f * kotlin.math.abs(cos(p * 12f + sway))
+        rotate(spinRate * p + angle * 57f, Offset(x, y)) {
+            when (kind) {
+                0 -> drawPath(leafPath(x, y, w * 1.8f * turn, w), color.copy(alpha = a))
+                1 -> drawOval(color.copy(alpha = a), Offset(x - w * turn, y - w * 0.5f), Size(w * 2f * turn, w))
+                else -> drawRect(color.copy(alpha = a), Offset(x - w * 0.9f * turn, y - w * 0.25f), Size(w * 1.8f * turn, w * 0.5f))
+            }
+        }
+    }
+}
+
+private fun leafPath(x: Float, y: Float, len: Float, wid: Float) = Path().apply {
+    moveTo(x - len / 2, y)
+    quadraticTo(x, y - wid, x + len / 2, y)
+    quadraticTo(x, y + wid, x - len / 2, y)
+    close()
+}
+
+/** Little four-point stars around the card, each twinkling in its own time. */
+private fun DrawScope.drawSparkles(shown: Float, twinkle: Float, seed: Int) {
+    if (shown <= 0f) return
+    val rnd = java.util.Random(seed.toLong() * 31)
+    repeat(12) {
+        val angle = rnd.nextFloat() * 2f * PI.toFloat()
+        val dist = size.minDimension * (0.33f + rnd.nextFloat() * 0.15f)
+        val phase = rnd.nextFloat()
+        val k = sin(((twinkle + phase) % 1f) * PI.toFloat())
+        val r = (3f + 6f * k) * density * shown
+        val c = Offset(center.x + cos(angle) * dist, center.y + sin(angle) * dist * 1.15f)
+        val star = Path().apply {
+            moveTo(c.x, c.y - r * 1.8f)
+            quadraticTo(c.x, c.y, c.x + r * 1.8f, c.y)
+            quadraticTo(c.x, c.y, c.x, c.y + r * 1.8f)
+            quadraticTo(c.x, c.y, c.x - r * 1.8f, c.y)
+            quadraticTo(c.x, c.y, c.x, c.y - r * 1.8f)
+            close()
+        }
+        drawPath(star, Color.White.copy(alpha = (0.3f + 0.7f * k) * shown))
     }
 }
 
@@ -789,6 +1126,10 @@ internal fun CollectedBanner(event: TodayViewModel.Event.Collected?, onOpen: (St
  * wall of photo cards numbered in the order they were first met. A card opens
  * the species page. [open] jumps straight to one species (from the banner or
  * a note's species line).
+ *
+ * Managing it: "Select" (or a long press on a card) picks kinds to remove;
+ * the species page removes that kind, or just the photo on show. Always
+ * asked first, and undoable from the snackbar; photos and notes are kept.
  */
 @Composable
 internal fun NatureCollectionPage(vm: TodayViewModel, open: String?, onAsk: (String, List<String>) -> Unit, onDismiss: () -> Unit) {
@@ -796,7 +1137,30 @@ internal fun NatureCollectionPage(vm: TodayViewModel, open: String?, onAsk: (Str
     var list by remember { mutableStateOf(vm.lastCollection) }
     var filter by remember { mutableStateOf<String?>(null) }
     var detail by remember { mutableStateOf(open) }
+    // Managing (§17.4): picked kinds, what is waiting for "Remove?", and the undo.
+    var selecting by remember { mutableStateOf(false) }
+    var selected by remember { mutableStateOf(emptySet<String>()) }
+    var asking by remember { mutableStateOf<Removal?>(null) }
+    val scope = rememberCoroutineScope()
+    val snackbar = remember { SnackbarHostState() }
+    val undoLabel = stringResource(R.string.today_undo)
     LaunchedEffect(Unit) { list = vm.collection() }
+    val ctx = LocalContext.current
+    val remove: (Removal) -> Unit = { r ->
+        scope.launch {
+            val undo = vm.removeFromCollection(r.latins, r.photo?.let { setOf(it.relativePath) })
+            list = vm.collection()
+            selecting = false
+            selected = emptySet()
+            val text = if (r.photo != null) ctx.getString(R.string.today_nature_photo_removed) else ctx.getString(R.string.today_nature_deleted, r.latins.size)
+            snackbar.currentSnackbarData?.dismiss()
+            if (snackbar.showSnackbar(text, actionLabel = undoLabel, duration = SnackbarDuration.Short) == SnackbarResult.ActionPerformed) {
+                undo()
+                list = vm.collection()
+            }
+        }
+    }
+    BackHandler(enabled = selecting && detail == null) { selecting = false; selected = emptySet() }
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         // Status bar icons: dark on the light grid, light over a species photo.
         val view = LocalView.current
@@ -806,12 +1170,30 @@ internal fun NatureCollectionPage(vm: TodayViewModel, open: String?, onAsk: (Str
                 WindowCompat.getInsetsController(w, view).isAppearanceLightStatusBars = lightBg && detail == null
             }
         }
-        Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize().testTag("today_collection")) {
+        Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize().testTag("today_collection")) { Box(Modifier.fillMaxSize()) {
             val l = list
             Column(Modifier.fillMaxSize().statusBarsPadding()) {
                 Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = onDismiss) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null) }
-                    Text(stringResource(R.string.today_nature_title), fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+                    if (selecting) {
+                        IconButton(onClick = { selecting = false; selected = emptySet() }) { Icon(Icons.Filled.Close, contentDescription = null) }
+                        Text(stringResource(R.string.today_nature_selected, selected.size), fontSize = 18.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                        // All of what the filter shows.
+                        TextButton(onClick = { selected = l.orEmpty().filter { filter == null || (it.group ?: "") == filter }.map { it.latin }.toSet() }) {
+                            Text(stringResource(R.string.today_nature_select_all))
+                        }
+                        val oneName = l.orEmpty().filter { it.latin in selected }.singleOrNull()?.let { speciesName(it.name, it.latin) }
+                        IconButton(
+                            onClick = { asking = Removal(selected, oneName) },
+                            enabled = selected.isNotEmpty(),
+                            modifier = Modifier.testTag("today_nature_delete"),
+                        ) { Icon(Icons.Outlined.Delete, contentDescription = stringResource(R.string.today_nature_delete)) }
+                    } else {
+                        IconButton(onClick = onDismiss) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null) }
+                        Text(stringResource(R.string.today_nature_title), fontSize = 18.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                        if (!l.isNullOrEmpty()) {
+                            TextButton(onClick = { selecting = true }, modifier = Modifier.testTag("today_nature_select")) { Text(stringResource(R.string.today_nature_select)) }
+                        }
+                    }
                 }
                 when {
                     l == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -837,7 +1219,15 @@ internal fun NatureCollectionPage(vm: TodayViewModel, open: String?, onAsk: (Str
                                     }
                                 }
                             }
-                            items(shown, key = { it.latin }) { c -> SpeciesCard(c, onClick = { detail = c.latin }) }
+                            items(shown, key = { it.latin }) { c ->
+                                val toggle = { selected = if (c.latin in selected) selected - c.latin else selected + c.latin }
+                                SpeciesCard(
+                                    c,
+                                    selected = if (selecting) c.latin in selected else null,
+                                    onClick = { if (selecting) toggle() else detail = c.latin },
+                                    onLongClick = { if (!selecting) { selecting = true; selected = setOf(c.latin) } else toggle() },
+                                )
+                            }
                         }
                     }
                 }
@@ -848,13 +1238,43 @@ internal fun NatureCollectionPage(vm: TodayViewModel, open: String?, onAsk: (Str
                 if (d != null) keep = d
                 keep?.let { sp ->
                     key(sp.latin) {
-                        SpeciesPage(vm, sp, l.orEmpty(), onOpen = { detail = it }, onBack = { detail = null }, onAsk = onAsk)
+                        SpeciesPage(vm, sp, l.orEmpty(), onOpen = { detail = it }, onBack = { detail = null }, onAsk = onAsk, onRemove = { asking = it })
                     }
                 }
             }
-        }
+            asking?.let { r ->
+                AlertDialog(
+                    onDismissRequest = { asking = null },
+                    title = {
+                        Text(
+                            when {
+                                r.photo != null -> stringResource(R.string.today_nature_remove_photo_title)
+                                r.name != null -> stringResource(R.string.today_nature_delete_one_title, r.name)
+                                else -> stringResource(R.string.today_nature_delete_many_title, r.latins.size)
+                            },
+                        )
+                    },
+                    text = {
+                        Text(
+                            if (r.photo != null) stringResource(R.string.today_nature_remove_photo_body, r.name.orEmpty())
+                            else stringResource(R.string.today_nature_delete_body),
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(onClick = { asking = null; remove(r) }, modifier = Modifier.testTag("today_nature_delete_confirm")) {
+                            Text(stringResource(R.string.today_nature_delete_confirm), color = MaterialTheme.colorScheme.error)
+                        }
+                    },
+                    dismissButton = { TextButton(onClick = { asking = null }) { Text(stringResource(android.R.string.cancel)) } },
+                )
+            }
+            SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 16.dp))
+        } }
     }
 }
+
+/** What "Remove?" is about: these kinds, or one [photo] of one kind; [name] when it is a single kind. */
+private class Removal(val latins: Set<String>, val name: String?, val photo: CameraPhoto? = null)
 
 @Composable
 private fun CollectionHero(l: List<CollectedSpecies>) {
@@ -886,8 +1306,12 @@ private fun FilterPill(label: String, selected: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
-private fun SpeciesCard(c: CollectedSpecies, onClick: () -> Unit) {
-    Box(Modifier.fillMaxWidth().aspectRatio(0.8f).clip(RoundedCornerShape(18.dp)).clickable(onClick = onClick).testTag("today_species_card")) {
+private fun SpeciesCard(c: CollectedSpecies, selected: Boolean?, onClick: () -> Unit, onLongClick: () -> Unit) {
+    val shrink by animateFloatAsState(if (selected == true) 0.92f else 1f, label = "pick")
+    Box(
+        Modifier.fillMaxWidth().aspectRatio(0.8f).scale(shrink).clip(RoundedCornerShape(18.dp))
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick).testTag("today_species_card"),
+    ) {
         PhotoImage(c.photos.firstOrNull(), Modifier.fillMaxSize(), size = 600, fallback = TodayViewModel.speciesEmoji(c.group))
         Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0.55f to Color.Transparent, 1f to Color(0xB3000000))))
         Text(
@@ -897,7 +1321,7 @@ private fun SpeciesCard(c: CollectedSpecies, onClick: () -> Unit) {
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier.padding(10.dp).clip(RoundedCornerShape(50)).background(Color(0x59000000)).padding(horizontal = 8.dp, vertical = 3.dp),
         )
-        if (c.records.size > 1) {
+        if (c.records.size > 1 && selected == null) {
             Text(
                 "×${c.records.size}",
                 color = Color.White,
@@ -908,6 +1332,15 @@ private fun SpeciesCard(c: CollectedSpecies, onClick: () -> Unit) {
         Column(Modifier.align(Alignment.BottomStart).padding(12.dp)) {
             Text(speciesName(c.name, c.latin), color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(c.latin, color = Color.White.copy(alpha = 0.8f), fontSize = 11.sp, fontStyle = FontStyle.Italic, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        if (selected != null) {
+            if (!selected) Box(Modifier.fillMaxSize().background(Color(0x33000000)))
+            Box(
+                Modifier.align(Alignment.TopEnd).padding(10.dp).size(24.dp).clip(CircleShape)
+                    .background(if (selected) Leaf else Color(0x59000000))
+                    .border(2.dp, Color.White, CircleShape),
+                contentAlignment = Alignment.Center,
+            ) { if (selected) Icon(Icons.Filled.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp)) }
         }
     }
 }
@@ -935,6 +1368,7 @@ private fun SpeciesPage(
     onOpen: (String) -> Unit,
     onBack: () -> Unit,
     onAsk: (String, List<String>) -> Unit,
+    onRemove: (Removal) -> Unit,
 ) {
     val zone = ZoneId.systemDefault()
     val whenFmt = DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM, FormatStyle.SHORT)
@@ -959,10 +1393,10 @@ private fun SpeciesPage(
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
             Box(Modifier.fillMaxWidth().aspectRatio(0.9f)) {
                 val photos = c.photos
+                val pager = rememberPagerState { photos.size }
                 if (photos.isEmpty()) {
                     PhotoImage(null, Modifier.fillMaxSize(), fallback = TodayViewModel.speciesEmoji(c.group))
                 } else {
-                    val pager = rememberPagerState { photos.size }
                     HorizontalPager(pager, Modifier.fillMaxSize()) { i -> PhotoImage(photos[i], Modifier.fillMaxSize(), size = 1200) }
                     if (photos.size > 1) {
                         Row(Modifier.align(Alignment.BottomCenter).padding(bottom = 14.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -975,6 +1409,27 @@ private fun SpeciesPage(
                 Box(Modifier.fillMaxWidth().height(110.dp).background(Brush.verticalGradient(listOf(Color(0x80000000), Color.Transparent))))
                 IconButton(onClick = onBack, modifier = Modifier.statusBarsPadding().padding(4.dp)) {
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null, tint = Color.White)
+                }
+                // Managing (§17.4): this photo, or the whole kind.
+                var menu by remember { mutableStateOf(false) }
+                val name = speciesName(c.name, c.latin)
+                Box(Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(4.dp)) {
+                    IconButton(onClick = { menu = true }, modifier = Modifier.testTag("today_species_more")) {
+                        Icon(Icons.Filled.MoreVert, contentDescription = null, tint = Color.White)
+                    }
+                    DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                        if (photos.size > 1) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.today_nature_remove_photo)) },
+                                onClick = { menu = false; onRemove(Removal(setOf(c.latin), name, photos[pager.currentPage])) },
+                            )
+                        }
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.today_nature_delete), color = MaterialTheme.colorScheme.error) },
+                            onClick = { menu = false; onRemove(Removal(setOf(c.latin), name)) },
+                            modifier = Modifier.testTag("today_species_delete"),
+                        )
+                    }
                 }
             }
             Column(Modifier.padding(horizontal = 20.dp, vertical = 18.dp).navigationBarsPadding()) {

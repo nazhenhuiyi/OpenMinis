@@ -175,8 +175,14 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
         data object NeedLocationPermission : Event
         data object AllHabitsDone : Event
         data object NeedNotificationPermission : Event
-        /** Just recorded a species (§17.2): [times] = how often it has been recorded now, 1 = new to the collection. */
-        data class Collected(val latin: String, val name: String, val group: String?, val number: Int, val times: Int, val total: Int, val isNew: Boolean) : Event
+        /**
+         * Just recorded a species (§17.2): [times] = how often it has been recorded now, 1 = new to the collection.
+         * [photo] is the picture to show it with; [firstOfGroup] = the first bird, first insect… ever.
+         */
+        data class Collected(
+            val latin: String, val name: String, val group: String?, val number: Int, val times: Int, val total: Int, val isNew: Boolean,
+            val photo: CameraPhoto? = null, val firstOfGroup: Boolean = false,
+        ) : Event
     }
     private val events = Channel<Event>(Channel.BUFFERED)
     val eventFlow = events.receiveAsFlow()
@@ -438,7 +444,7 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { st -> st.copy(tags = st.tags + photos.associate { it.relativePath to tag }) }
         viewModelScope.launch {
             // Celebrate on the tap, not after the file write and a rescan (§17.2).
-            if (fresh.isNotEmpty()) announce(tag, added = fresh.size, replacing = replaced)
+            if (fresh.isNotEmpty()) events.send(count(tag, added = fresh.size, replacing = replaced).copy(photo = fresh.first()))
             writeTags(photos.associateWith { tag })
         }
     }
@@ -525,8 +531,14 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
         return tags.mapValues { (_, t) -> names[t.latin]?.let { t.copy(name = it) } ?: t }
     }
 
-    /** One sighting found in the files: a tagged photo, or (older data) a note carrying `species`. */
-    private class Sighting(val latin: String, val name: String, val atMs: Long, val body: String, val place: String?, val photos: List<String>)
+    /**
+     * One sighting found in the files: a tagged photo ([tag]), or (older data) a
+     * note carrying `species` ([entryId]). [day] is the file it lives in.
+     */
+    private class Sighting(
+        val latin: String, val name: String, val atMs: Long, val body: String, val place: String?, val photos: List<String>,
+        val day: LocalDate? = null, val tag: PhotoTag? = null, val entryId: String? = null,
+    )
 
     /**
      * The sightings of each day file, kept with the file's size and time so a
@@ -558,11 +570,11 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
         val doc = store.readDay(d) ?: return emptyList()
         val dayMs = d.atStartOfDay(zone).toInstant().toEpochMilli()
         val out = ArrayList<Sighting>()
-        for ((path, t) in PhotoSpecies.parse(doc.frontMatter)) out += Sighting(t.latin, t.name, dayMs, "", null, listOf(path))
+        for ((path, t) in PhotoSpecies.parse(doc.frontMatter)) out += Sighting(t.latin, t.name, dayMs, "", null, listOf(path), d, tag = t)
         for (e in doc.entries) {
             val latin = e.species ?: continue
             val atMs = e.at?.toInstant()?.toEpochMilli() ?: dayMs
-            out += Sighting(latin, e.attrs[JournalEntry.KEY_SPECIES_NAME] ?: latin, atMs, e.body, e.place, e.photos)
+            out += Sighting(latin, e.attrs[JournalEntry.KEY_SPECIES_NAME] ?: latin, atMs, e.body, e.place, e.photos, d, entryId = e.id)
         }
         return out
     }
@@ -604,22 +616,24 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
         val photos = photosOf(raw.flatMap { it.photos }.toSet())
         val timed = raw.map { r ->
             if (r.body.isNotEmpty()) r
-            else r.photos.firstNotNullOfOrNull { photos[it] }?.let { p -> Sighting(r.latin, r.name, p.takenAtMs, r.body, r.place, r.photos) } ?: r
+            else r.photos.firstNotNullOfOrNull { photos[it] }?.let { p -> Sighting(r.latin, r.name, p.takenAtMs, r.body, r.place, r.photos, r.day, r.tag, r.entryId) } ?: r
         }
         return timed to photos
     }
-
-    /** The little celebration after recording: new kind, or seen again (§17.2). */
-    private suspend fun announce(t: PhotoTag, added: Int, replacing: List<PhotoTag>) = events.send(count(t, added, replacing))
 
     /** Moves the collection counts for a recording, and says what it means: new kind or seen again, and its number. */
     private suspend fun count(t: PhotoTag, added: Int, replacing: List<PhotoTag>): Event.Collected {
         val m = kinds()
         for (old in replacing) m[old.latin]?.let { n -> if (n <= 1) m.remove(old.latin) else m[old.latin] = n - 1 }
         val isNew = m[t.latin] == null
+        val firstOfGroup = isNew && t.group != null && m.keys.none { groupOf(it) == t.group }
         m[t.latin] = (m[t.latin] ?: 0) + added
-        return Event.Collected(t.latin, t.name, t.group, m.keys.indexOf(t.latin) + 1, m.getValue(t.latin), m.size, isNew)
+        return Event.Collected(t.latin, t.name, t.group, m.keys.indexOf(t.latin) + 1, m.getValue(t.latin), m.size, isNew, firstOfGroup = firstOfGroup)
     }
+
+    /** Bird, plant, insect…: from the species list, or for a genus from one of its species. */
+    private suspend fun groupOf(latin: String): String? =
+        SpeciesId.taxon(context, latin)?.group ?: if (' ' !in latin) SpeciesId.anyOfGenus(context, latin)?.group else null
 
     /** "Not this": the suggestions on [photos] go away for good. Returns how to undo it. */
     fun dismissSuggestions(photos: List<CameraPhoto>): () -> Unit {
@@ -634,6 +648,39 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
     private fun clearSuggestion(path: String, userSaidNo: Boolean = false) {
         speciesCache.edit().putString(path, if (userSaidNo) USER_NO else NO_SPECIES).apply()
         _state.update { it.copy(suggestions = it.suggestions - path) }
+    }
+
+    /**
+     * Take things out of the collection (§17.4): every kind in [latins] — or,
+     * with [photos], only those photos of them. Photo tags come off (and those
+     * photos are not suggested again); a note that carries the species keeps
+     * its words and loses only the species. No photo or note is deleted.
+     * Returns how to undo it.
+     */
+    suspend fun removeFromCollection(latins: Set<String>, photos: Set<String>? = null): suspend () -> Unit {
+        val hit = sightings().filter { it.latin in latins && (photos == null || it.photos.any { p -> p in photos }) }
+        val tagged = hit.filter { it.tag != null && it.day != null }
+        val notes = hit.filter { it.entryId != null && it.day != null }
+        val paths = tagged.flatMap { it.photos }
+        val verdicts = paths.associateWith { speciesCache.getString(it, null) }
+        speciesCache.edit().apply { paths.forEach { putString(it, USER_NO) } }.apply()
+        _state.update { st -> st.copy(tags = st.tags - paths.toSet(), suggestions = st.suggestions - paths.toSet()) }
+        for ((day, ss) in tagged.groupBy { it.day!! }) setTags(day, ss.associate { it.photos.single() to null })
+        val noteAttrs = notes.associateWith { n ->
+            store.readDay(n.day!!)?.entries?.firstOrNull { it.id == n.entryId }?.attrs.orEmpty()
+                .filterKeys { it == JournalEntry.KEY_SPECIES || it == JournalEntry.KEY_SPECIES_NAME }
+        }
+        for (n in notes) store.setAttrs(n.day!!, n.entryId!!, mapOf(JournalEntry.KEY_SPECIES to null, JournalEntry.KEY_SPECIES_NAME to null))
+        kinds = null
+        lastCollection = null
+        return {
+            speciesCache.edit().apply { verdicts.forEach { (p, v) -> if (v == null) remove(p) else putString(p, v) } }.apply()
+            for ((day, ss) in tagged.groupBy { it.day!! }) setTags(day, ss.associate { it.photos.single() to it.tag })
+            for ((n, attrs) in noteAttrs) store.setAttrs(n.day!!, n.entryId!!, attrs)
+            _state.update { st -> st.copy(tags = st.tags + withListNames(tagged.associate { it.photos.single() to it.tag!! })) }
+            kinds = null
+            lastCollection = null
+        }
     }
 
     /** The collection as last built, to show at once while it is brought up to date. */
