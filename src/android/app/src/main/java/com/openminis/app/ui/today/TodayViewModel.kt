@@ -101,6 +101,9 @@ data class TodayUiState(
     val todayHabits: List<HabitProgress> = emptyList(),
     /** Species ID files are on this phone (§17); off = no suggestions and no "identify" item. */
     val speciesReady: Boolean = false,
+    /** No usable NPU, but the files are here: the "on the CPU" switch is offered, and whether it is on (§17.1). */
+    val speciesCpuOffered: Boolean = false,
+    val speciesCpu: Boolean = false,
     /** Species recorded for photos, by relative path (§17.2): shown as a tag on the photo. */
     val tags: Map<String, PhotoTag> = emptyMap(),
     /** Confident species guesses for timeline photos, by relative path (§17.2). */
@@ -365,12 +368,14 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
      */
     private suspend fun suggestSpecies(days: List<TodayDay>) {
         val ready = SpeciesId.isReady(context)
-        _state.update { it.copy(speciesReady = ready) }
+        _state.update { it.copy(speciesReady = ready, speciesCpuOffered = SpeciesId.cpuOffered(context), speciesCpu = SpeciesId.useCpu(context)) }
         if (!ready) return
         migrateSpeciesNotes()
         refreshSpeciesCache()
         // Only the last few days are looked at unasked (§17.2); older photos wait for "Identify".
-        val since = LocalDate.now(zone).minusDays((AUTO_DAYS - 1).toLong())
+        // On the CPU (several seconds a photo) only today's photos, so opening Today doesn't keep the CPU busy for minutes.
+        val autoDays = if (SpeciesId.backend(context) == SpeciesId.Backend.CPU) 1 else AUTO_DAYS
+        val since = LocalDate.now(zone).minusDays((autoDays - 1).toLong())
         val groups = days.filter { !it.date.isBefore(since) }.asReversed()
             .flatMap { d -> d.rows.asReversed().filterIsInstance<TodayRow.Group>() }
         // What was decided before shows at once, in one update; only new photos go to the model.
@@ -1004,6 +1009,13 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
             }
 
     // ── Settings (⋯ menu) ─────────────────────────────────────────────────
+
+    /** Species ID on the CPU, for phones whose NPU can't run it (§17.1). */
+    fun setSpeciesCpu(on: Boolean) {
+        SpeciesId.setUseCpu(context, on)
+        _state.update { it.copy(speciesCpu = on) }
+        reload()
+    }
 
     fun setRecordLocation(on: Boolean) {
         prefs.edit().putBoolean(KEY_RECORD_LOCATION, on).apply()

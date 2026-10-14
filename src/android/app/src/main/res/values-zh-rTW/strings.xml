@@ -2131,6 +2131,10 @@
     <string name="today_copied">已複製</string>
     <string name="today_settings_location">記錄位置</string>
     <string name="today_settings_albums">包含的相簿</string>
+    <string name="today_settings_species_cpu">用 CPU 認動植物</string>
+    <string name="today_species_cpu_title">改用 CPU 辨識？</string>
+    <string name="today_species_cpu_body">這支手機的 NPU 跑不了辨識模型，可以改用 CPU。認出來的結果一樣，但每張照片要幾秒鐘、更耗電，只看畫面中間，自動辨識也只看今天的照片。想認邊上的東西，可以在「認一認」裡把它框出來。</string>
+    <string name="today_species_cpu_on">開啟</string>
     <string name="today_albums_body">相機目錄總是包含在內。如果你的相機把照片存到別的地方，可以在這裡勾選。</string>
     <string name="today_location_off_toast">已關閉記錄位置，可以在 ⋯ 選單裡重新開啟</string>
     <string name="today_photos_returned">照片已放入時間軸</string>

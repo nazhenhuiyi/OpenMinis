@@ -2335,6 +2335,10 @@
     <string name="today_copied">Copied</string>
     <string name="today_settings_location">Record location</string>
     <string name="today_settings_albums">Included albums</string>
+    <string name="today_settings_species_cpu">Recognize nature on the CPU</string>
+    <string name="today_species_cpu_title">Use the CPU?</string>
+    <string name="today_species_cpu_body">This phone\'s NPU can\'t run the recognition model, but its CPU can. The answers are the same, but each photo takes a few seconds and uses more battery, only the middle of the photo is looked at, and only today\'s photos are recognized on their own. To recognize something near the edge, draw a box around it in Identify.</string>
+    <string name="today_species_cpu_on">Turn on</string>
     <string name="today_albums_body">Camera folders are always included. Tick other albums if your camera saves somewhere else.</string>
     <string name="today_location_off_toast">Location recording is off. Turn it back on from the ⋯ menu.</string>
     <string name="today_photos_returned">Photos added to the timeline</string>

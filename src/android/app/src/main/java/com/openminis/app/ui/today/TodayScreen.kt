@@ -301,6 +301,8 @@ fun TodayScreen(
                 onAlbums = { showAlbums = true },
                 onHabits = { showHabits = true },
                 onCollection = { nature = null; showNature = true },
+                speciesCpu = if (state.speciesCpuOffered) state.speciesCpu else null,
+                onSpeciesCpu = vm::setSpeciesCpu,
                 habits = state.todayHabits,
                 // No habits at all → a ghost chip that leads to the manager (SPEC §14.3).
                 ghostChip = state.habits.none { !it.archived },
@@ -597,11 +599,14 @@ private fun TodayTopBar(
     onAlbums: () -> Unit,
     onHabits: () -> Unit,
     onCollection: () -> Unit,
+    speciesCpu: Boolean?,
+    onSpeciesCpu: (Boolean) -> Unit,
     habits: List<com.openminis.app.data.journal.HabitProgress>,
     ghostChip: Boolean,
     onHabitsChip: (ghost: Boolean) -> Unit,
 ) {
     var menu by remember { mutableStateOf(false) }
+    var askCpu by remember { mutableStateOf(false) }
     Row(Modifier.fillMaxWidth().padding(start = 18.dp, end = 6.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(stringResource(R.string.tab_today), fontSize = 22.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.width(10.dp))
@@ -639,8 +644,26 @@ private fun TodayTopBar(
                     text = { Text(stringResource(R.string.today_settings_albums)) },
                     onClick = { menu = false; onAlbums() },
                 )
+                // Only on phones whose NPU can't run the model: the NPU always comes first (§17.1).
+                if (speciesCpu != null) {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.today_settings_species_cpu)) },
+                        trailingIcon = { Switch(checked = speciesCpu, onCheckedChange = null) },
+                        onClick = { if (speciesCpu) onSpeciesCpu(false) else { menu = false; askCpu = true } },
+                        modifier = Modifier.testTag("today_menu_species_cpu"),
+                    )
+                }
             }
         }
+    }
+    if (askCpu) {
+        AlertDialog(
+            onDismissRequest = { askCpu = false },
+            title = { Text(stringResource(R.string.today_species_cpu_title)) },
+            text = { Text(stringResource(R.string.today_species_cpu_body)) },
+            confirmButton = { TextButton(onClick = { askCpu = false; onSpeciesCpu(true) }) { Text(stringResource(R.string.today_species_cpu_on)) } },
+            dismissButton = { TextButton(onClick = { askCpu = false }) { Text(stringResource(android.R.string.cancel)) } },
+        )
     }
 }
 

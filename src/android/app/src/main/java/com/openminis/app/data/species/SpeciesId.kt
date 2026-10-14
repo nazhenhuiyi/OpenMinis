@@ -32,11 +32,13 @@ import kotlin.math.roundToInt
  * compared with precomputed embeddings of the species found in China. Nothing
  * leaves the phone.
  *
- * NPU only: the encoder runs on a Snapdragon's Hexagon NPU through ONNX
- * Runtime's QNN provider (~30 ms a photo). Phones without one — or whose NPU
- * can't run it — simply don't get the feature: [isReady] is false and Today
- * shows nothing of it. Files live in `getExternalFilesDir("species")` (see
- * [REQUIRED]).
+ * NPU first: the encoder runs on a Snapdragon's Hexagon NPU through ONNX
+ * Runtime's QNN provider (~30 ms a look). Phones without one — or whose NPU
+ * can't run it — get the feature only if the user switches on the CPU
+ * ([setUseCpu]): the same model file on ONNX Runtime's CPU provider, about
+ * 30× slower, so each photo is looked at only in the middle (twice, as it is
+ * and mirrored). A phone whose NPU works never uses the CPU. Files live in
+ * `getExternalFilesDir("species")` (see [REQUIRED]).
  *
  * The first load compiles the model for the NPU (~35 s) and caches the result
  * in noBackupFilesDir; every later load reads the cache (~0.4 s). The cache is
@@ -141,8 +143,29 @@ object SpeciesId {
 
     fun dir(context: Context): File? = context.getExternalFilesDir("species")
 
-    fun isReady(context: Context): Boolean =
-        hasNpu(context) && dir(context)?.let { d -> REQUIRED.all { File(d, it).isFile } } == true
+    fun isReady(context: Context): Boolean = hasFiles(context) && backend(context) != null
+
+    private fun hasFiles(context: Context): Boolean = dir(context)?.let { d -> REQUIRED.all { File(d, it).isFile } } == true
+
+    /** Where the encoder runs: the NPU whenever it works; the CPU only if switched on; null = not at all. */
+    enum class Backend { NPU, CPU }
+
+    fun backend(context: Context): Backend? = when {
+        hasNpu(context) -> Backend.NPU
+        useCpu(context) -> Backend.CPU
+        else -> null
+    }
+
+    /** The files are here but the NPU can't be used: the CPU switch is offered (§17.1). */
+    fun cpuOffered(context: Context): Boolean = hasFiles(context) && !hasNpu(context)
+
+    fun useCpu(context: Context): Boolean = prefs(context).getBoolean(KEY_USE_CPU, false)
+
+    /** Switch the CPU fallback on or off; only matters where [cpuOffered]. */
+    fun setUseCpu(context: Context, on: Boolean) {
+        prefs(context).edit().putBoolean(KEY_USE_CPU, on).apply()
+        scope.launch { closeSession() }
+    }
 
     /**
      * A Snapdragon on Android 12+ whose NPU hasn't failed us in this app
@@ -167,7 +190,9 @@ object SpeciesId {
         val tsv = File(d, NAMES)
         val bin = File(d, EMBEDDINGS)
         val prior = File(d, PRIOR)
-        return "$VIEW_STRATEGY-${tsv.length()}-${tsv.lastModified()}-${bin.length()}-${bin.lastModified()}-${prior.length()}"
+        // CPU verdicts look at less of each photo: redone if the NPU is used later.
+        val how = if (backend(context) == Backend.CPU) "$VIEW_STRATEGY/cpu" else VIEW_STRATEGY
+        return "$how-${tsv.length()}-${tsv.lastModified()}-${bin.length()}-${bin.lastModified()}-${prior.length()}"
     }
 
     /** Give up on the NPU for this app version: the feature disappears; an update tries again. */
@@ -182,6 +207,7 @@ object SpeciesId {
     private val scope = CoroutineScope(SupervisorJob() + worker)
 
     private var session: OrtSession? = null
+    private var sessionBackend: Backend? = null
     private var table: Table? = null
     private var releaseJob: Job? = null
 
@@ -225,6 +251,8 @@ object SpeciesId {
             try {
                 if (region != null) return@withContext look(photo.square(region), mirrored = true)
                 val centre = look(photo.centre(), mirrored = true) ?: return@withContext null
+                // On the CPU each look takes about a second: the middle only (a drawn box still reaches the rest).
+                if (sessionBackend == Backend.CPU) return@withContext centre
                 // The model searches the frame itself: overlapping parts at two sizes, the surest wins
                 // over the middle only by a clear margin (Mac test: fixes off-centre subjects, no new
                 // false finds on everyday photos). Each part is looked at once; the winner again mirrored.
@@ -259,9 +287,17 @@ object SpeciesId {
         return out
     }
 
-    /** One run of the encoder; null when the NPU failed (counted, see [MAX_FAILURES]). */
+    private fun closeSession() {
+        runCatching { session?.close() }
+        session = null
+        sessionBackend = null
+    }
+
+    /** One run of the encoder; null when it failed (on the NPU counted, see [MAX_FAILURES]). */
     private fun encode(app: Context, pixels: FloatArray): FloatArray? = try {
-        val s = session ?: open(app).also { session = it }
+        val b = backend(app) ?: throw ai.onnxruntime.OrtException("species ID is off")
+        if (sessionBackend != b) closeSession()
+        val s = session ?: open(app, b).also { session = it; sessionBackend = b }
         val emb = OnnxTensor.createTensor(OrtEnvironment.getEnvironment(), FloatBuffer.wrap(pixels), longArrayOf(1, 3, SIZE.toLong(), SIZE.toLong())).use { x ->
             s.run(mapOf(s.inputNames.first() to x)).use { out ->
                 @Suppress("UNCHECKED_CAST")
@@ -275,13 +311,17 @@ object SpeciesId {
         // One failed run may be a hiccup: drop the session (and its compiled cache) and
         // try fresh next time; only several in a row mean this NPU can't do it.
         AppLogger.warning(TAG, "encoder failed: ${e.message}")
-        runCatching { session?.close() }
-        session = null
+        val onNpu = sessionBackend != Backend.CPU
+        closeSession()
+        if (onNpu) countNpuFailure(app, e)
+        null
+    }
+
+    private fun countNpuFailure(app: Context, e: Exception) {
         clearCompiled(app)
         val n = prefs(app).getInt(KEY_FAILURES, 0) + 1
         prefs(app).edit().putInt(KEY_FAILURES, n).apply()
         if (n >= MAX_FAILURES) markBroken(app, "$n failed runs: ${e.message}")
-        null
     }
 
     // ── Where and when (the prior) ───────────────────────────────────────
@@ -507,7 +547,11 @@ object SpeciesId {
         if (!isReady(context)) return
         val app = context.applicationContext
         scope.launch {
-            runCatching { if (session == null) session = open(app); if (table == null) table = loadTable(app) }
+            runCatching {
+                // Only the NPU is worth loading ahead (its compile); on the CPU the ~0.5 GB session waits for a photo.
+                if (session == null && backend(app) == Backend.NPU) { session = open(app, Backend.NPU); sessionBackend = Backend.NPU }
+                if (table == null) table = loadTable(app)
+            }
                 .onFailure { AppLogger.warning(TAG, "warm-up failed: ${it.message}") }
             scheduleRelease()
         }
@@ -519,8 +563,7 @@ object SpeciesId {
         releaseJob?.cancel()
         releaseJob = scope.launch {
             delay(IDLE_RELEASE_MS)
-            runCatching { session?.close() }
-            session = null
+            closeSession()
             table = null
         }
     }
@@ -535,10 +578,12 @@ object SpeciesId {
      * any more is thrown away and recompiled; a compile that fails means this
      * phone's NPU can't run the model, and the feature is switched off.
      */
-    private fun open(context: Context): OrtSession {
+    private fun open(context: Context, backend: Backend): OrtSession {
         // No usage reports to Microsoft (the AAR's provider that would send them is removed from the manifest too).
         val env = OrtEnvironment.getEnvironment().also { runCatching { it.setTelemetry(false) } }
         val d = dir(context)!!
+        // The CPU reads the same model file as is; nothing to compile or cache.
+        if (backend == Backend.CPU) return env.createSession(File(d, NPU_MODEL).path, cpuOptions())
         // The DSP side loads its half of QNN from ADSP_LIBRARY_PATH, so the app's own copy must be on it.
         val libDir = context.applicationInfo.nativeLibraryDir
         android.system.Os.setenv("ADSP_LIBRARY_PATH", "$libDir;/odm/lib/rfsa/adsp;/vendor/lib/rfsa/adsp;/system/lib/rfsa/adsp;/vendor/dsp/cdsp;/dsp", true)
@@ -562,6 +607,12 @@ object SpeciesId {
             markBroken(context, "compile failed: ${e.message}")
             throw e
         }
+    }
+
+    private fun cpuOptions() = OrtSession.SessionOptions().apply {
+        setCPUArenaAllocator(false)
+        setMemoryPatternOptimization(false)
+        setIntraOpNumThreads(4)
     }
 
     private fun npuOptions(compileTo: File?) = OrtSession.SessionOptions().apply {
@@ -598,6 +649,8 @@ object SpeciesId {
     private const val PREFS = "species_id"
     /** App version code in which the NPU was given up on. */
     private const val KEY_NPU_BROKEN = "npuBrokenInVersion"
+    /** The user switched on species ID on the CPU (only offered without a usable NPU). */
+    private const val KEY_USE_CPU = "useCpu"
     private const val KEY_FAILURES = "npuFailures"
 
     /**
