@@ -18,10 +18,16 @@ data class CameraPhoto(
     val takenAtMs: Long,
     val width: Int,
     val height: Int,
+    /** A video from the library: shown and played, never looked at by species ID. */
+    val isVideo: Boolean = false,
+    val durationMs: Long = 0,
 ) {
     /** Stable reference stored in journal `photos=` (SPEC §5.3): survives reinstall, unlike `_ID`. */
     val relativePath: String get() = relativeDir + displayName
 }
+
+/** Photos only: what species ID and the chat can look at (videos are shown, never looked at). */
+val List<CameraPhoto>.stills: List<CameraPhoto> get() = filter { !it.isVideo }
 
 enum class PhotoSource { MINIS, CAMERA, INCLUDED_ALBUM }
 
@@ -51,6 +57,32 @@ object CameraRollRules {
         else -> null
     }
 
+    /** How close in time a library photo must be to a note to leave its group for that note (§18.2). */
+    const val ABSORB_WINDOW_MS = 3 * 60 * 60 * 1000L
+
+    /**
+     * Does a photo attached to a note leave its automatic group (§18.2)? Yes
+     * when Minis made it (a composer shot, a copy for a note) or it was taken
+     * close to the note; an older photo picked for a note shows in both places.
+     */
+    fun absorbedBy(noteAtMs: Long, photo: CameraPhoto): Boolean =
+        photo.relativeDir.startsWith(MINIS_DIR) || kotlin.math.abs(photo.takenAtMs - noteAtMs) <= ABSORB_WINDOW_MS
+
+    /**
+     * A video's location tag (ISO 6709, as `MediaMetadataRetriever` gives it):
+     * `+31.2304+121.4737/`, maybe with an altitude after the longitude.
+     * Null when absent, malformed, or the 0,0 some cameras write for "unknown".
+     */
+    fun parseIso6709(s: String?): Pair<Double, Double>? {
+        val m = ISO6709.find(s ?: return null) ?: return null
+        val lat = m.groupValues[1].toDoubleOrNull() ?: return null
+        val lng = m.groupValues[2].toDoubleOrNull() ?: return null
+        if (lat !in -90.0..90.0 || lng !in -180.0..180.0 || (lat == 0.0 && lng == 0.0)) return null
+        return lat to lng
+    }
+
+    private val ISO6709 = Regex("^([+-]\\d{1,2}(?:\\.\\d+)?)([+-]\\d{1,3}(?:\\.\\d+)?)")
+
     /**
      * Some ROM cameras ignore EXTRA_OUTPUT or also save their own copy, so a
      * shot taken from Today can show up twice. A camera-folder photo within
@@ -62,7 +94,8 @@ object CameraRollRules {
         return photos.filter { p ->
             if (p.relativeDir.startsWith(MINIS_DIR)) return@filter true
             minis.none { m ->
-                kotlin.math.abs(m.takenAtMs - p.takenAtMs) <= windowMs &&
+                m.isVideo == p.isVideo &&
+                    kotlin.math.abs(m.takenAtMs - p.takenAtMs) <= windowMs &&
                     ((m.width == p.width && m.height == p.height) || (m.width == p.height && m.height == p.width))
             }
         }

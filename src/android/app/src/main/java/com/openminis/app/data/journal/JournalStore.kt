@@ -75,15 +75,16 @@ class JournalStore(
     }
 
     /**
-     * Replace an entry's text. [by] records who wrote the new text: an edit in
-     * the app clears the agent mark (the words are the user's again), an agent
-     * edit sets it.
+     * Replace an entry's text, and its [photos] when given (the app's edit
+     * can add and remove them). [by] records who wrote the new text: an edit
+     * in the app clears the agent mark (the words are the user's again), an
+     * agent edit sets it.
      */
-    suspend fun editBody(date: LocalDate, id: String, body: String, by: String? = null): Boolean =
+    suspend fun editBody(date: LocalDate, id: String, body: String, by: String? = null, photos: List<String>? = null): Boolean =
         update(date, id) {
-            it.copy(body = body.trim()).withAttrs(
-                mapOf(JournalEntry.KEY_EDITED to JournalCodec.formatTime(clock()), JournalEntry.KEY_BY to by),
-            )
+            val attrs = linkedMapOf(JournalEntry.KEY_EDITED to JournalCodec.formatTime(clock()), JournalEntry.KEY_BY to by)
+            if (photos != null) attrs[JournalEntry.KEY_PHOTOS] = photos.distinct().joinToString(",").ifEmpty { null }
+            it.copy(body = body.trim()).withAttrs(attrs)
         }
 
     /**

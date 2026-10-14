@@ -20,7 +20,7 @@ import kotlinx.coroutines.withContext
 
 /**
  * [T-today-tab] Reads the system photo library (MediaStore) for the Today
- * timeline. Which rows count is decided by [CameraRollRules]; this class only
+ * timeline: photos and videos alike. Which rows count is decided by [CameraRollRules]; this class only
  * does the I/O (docs/design/today/SPEC.md §5).
  */
 class CameraRollSource(private val context: Context) {
@@ -31,7 +31,6 @@ class CameraRollSource(private val context: Context) {
     data class Album(val bucketId: String, val name: String, val relativeDir: String, val count: Int)
 
     fun access(): Access {
-        fun granted(p: String) = ContextCompat.checkSelfPermission(context, p) == PackageManager.PERMISSION_GRANTED
         return when {
             Build.VERSION.SDK_INT >= 33 && granted(Manifest.permission.READ_MEDIA_IMAGES) -> Access.FULL
             Build.VERSION.SDK_INT >= 34 && granted(Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) -> Access.PARTIAL
@@ -41,9 +40,19 @@ class CameraRollSource(private val context: Context) {
     }
 
     /**
-     * Photos the user took in `[startMs, endMs)`, oldest first, already
-     * filtered (§5.1) and de-duplicated (§5.4). Photos Minis itself wrote are
-     * readable without any permission (the app owns those rows).
+     * Photos are allowed but videos are not: a user who allowed photos before
+     * videos were shown. Same permission group, so asking again is usually
+     * granted without a dialog.
+     */
+    fun videosMissing(): Boolean =
+        Build.VERSION.SDK_INT >= 33 && granted(Manifest.permission.READ_MEDIA_IMAGES) && !granted(Manifest.permission.READ_MEDIA_VIDEO)
+
+    private fun granted(p: String) = ContextCompat.checkSelfPermission(context, p) == PackageManager.PERMISSION_GRANTED
+
+    /**
+     * Photos and videos the user took in `[startMs, endMs)`, oldest first,
+     * already filtered (§5.1) and de-duplicated (§5.4). Photos Minis itself
+     * wrote are readable without any permission (the app owns those rows).
      */
     suspend fun query(startMs: Long, endMs: Long, includedBuckets: Set<String>): List<CameraPhoto> =
         withContext(Dispatchers.IO) {
@@ -59,14 +68,14 @@ class CameraRollSource(private val context: Context) {
             if (paths.isEmpty()) return@withContext emptyMap()
             val names = paths.map { it.substringAfterLast('/') }.distinct()
             val placeholders = names.joinToString(",") { "?" }
-            val rows = runQuery("${MediaStore.Images.Media.DISPLAY_NAME} IN ($placeholders)", names.toTypedArray(), null)
+            val rows = runQueries("${MediaStore.MediaColumns.DISPLAY_NAME} IN ($placeholders)", names.toTypedArray(), null)
             val wanted = paths.toSet()
             rows.filter { it.relativePath in wanted }.associateBy { it.relativePath }
         }
 
     /** Every album that has photos, for the include-albums picker. */
     suspend fun albums(): List<Album> = withContext(Dispatchers.IO) {
-        runQuery(null, null, null)
+        runQueries(null, null, null)
             .groupBy { it.bucketId ?: it.relativeDir }
             .map { (id, ps) -> Album(id, ps.first().bucketName ?: ps.first().relativeDir, ps.first().relativeDir, ps.size) }
             .sortedByDescending { it.count }
@@ -80,34 +89,40 @@ class CameraRollSource(private val context: Context) {
             }
         }
         context.contentResolver.registerContentObserver(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, true, observer)
+        context.contentResolver.registerContentObserver(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, true, observer)
         awaitClose { context.contentResolver.unregisterContentObserver(observer) }
     }
 
     private fun queryRows(startMs: Long, endMs: Long): List<CameraPhoto> {
         // DATE_TAKEN can be 0/null for some imports; fall back to DATE_ADDED (seconds).
-        val sel = "((${MediaStore.Images.Media.DATE_TAKEN} >= ? AND ${MediaStore.Images.Media.DATE_TAKEN} < ?) OR " +
-            "((${MediaStore.Images.Media.DATE_TAKEN} IS NULL OR ${MediaStore.Images.Media.DATE_TAKEN} = 0) AND " +
-            "${MediaStore.Images.Media.DATE_ADDED} >= ? AND ${MediaStore.Images.Media.DATE_ADDED} < ?))"
+        val taken = MediaStore.Images.Media.DATE_TAKEN
+        val added = MediaStore.MediaColumns.DATE_ADDED
+        val sel = "(($taken >= ? AND $taken < ?) OR (($taken IS NULL OR $taken = 0) AND $added >= ? AND $added < ?))"
         val args = arrayOf(startMs.toString(), endMs.toString(), (startMs / 1000).toString(), (endMs / 1000).toString())
-        return runQuery(sel, args, "${MediaStore.Images.Media.DATE_TAKEN} ASC")
-            .sortedBy { it.takenAtMs }
+        return runQueries(sel, args, "$taken ASC").sortedBy { it.takenAtMs }
     }
 
+    /** Images, then videos: same columns, two collections (a video needs its own permission on 13+). */
+    private fun runQueries(selection: String?, args: Array<String>?, order: String?): List<CameraPhoto> =
+        runQuery(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, false, selection, args, order) +
+            runQuery(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, true, selection, args, order)
+
     @Suppress("DEPRECATION")
-    private fun runQuery(selection: String?, args: Array<String>?, order: String?): List<CameraPhoto> {
-        val uri: Uri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+    private fun runQuery(uri: Uri, video: Boolean, selection: String?, args: Array<String>?, order: String?): List<CameraPhoto> {
+        // Images.Media and Video.Media share these column names.
         val cols = buildList {
-            add(MediaStore.Images.Media._ID)
-            add(MediaStore.Images.Media.DISPLAY_NAME)
+            add(MediaStore.MediaColumns._ID)
+            add(MediaStore.MediaColumns.DISPLAY_NAME)
             add(MediaStore.Images.Media.DATE_TAKEN)
-            add(MediaStore.Images.Media.DATE_ADDED)
-            add(MediaStore.Images.Media.WIDTH)
-            add(MediaStore.Images.Media.HEIGHT)
+            add(MediaStore.MediaColumns.DATE_ADDED)
+            add(MediaStore.MediaColumns.WIDTH)
+            add(MediaStore.MediaColumns.HEIGHT)
             add(MediaStore.Images.Media.BUCKET_ID)
             add(MediaStore.Images.Media.BUCKET_DISPLAY_NAME)
-            add(MediaStore.Images.Media.DATA)
-            if (Build.VERSION.SDK_INT >= 29) add(MediaStore.Images.Media.RELATIVE_PATH)
-            if (Build.VERSION.SDK_INT >= 29) add(MediaStore.Images.Media.IS_PENDING)
+            add(MediaStore.MediaColumns.DATA)
+            if (Build.VERSION.SDK_INT >= 29) add(MediaStore.MediaColumns.RELATIVE_PATH)
+            if (Build.VERSION.SDK_INT >= 29) add(MediaStore.MediaColumns.IS_PENDING)
+            if (video) add(MediaStore.Video.Media.DURATION)
         }.toTypedArray()
         val out = ArrayList<CameraPhoto>()
         try {
@@ -120,9 +135,10 @@ class CameraRollSource(private val context: Context) {
                 val iH = c.getColumnIndexOrThrow(cols[5])
                 val iBucket = c.getColumnIndexOrThrow(cols[6])
                 val iBucketName = c.getColumnIndexOrThrow(cols[7])
-                val iData = c.getColumnIndex(MediaStore.Images.Media.DATA)
-                val iRel = if (Build.VERSION.SDK_INT >= 29) c.getColumnIndex(MediaStore.Images.Media.RELATIVE_PATH) else -1
-                val iPending = if (Build.VERSION.SDK_INT >= 29) c.getColumnIndex(MediaStore.Images.Media.IS_PENDING) else -1
+                val iData = c.getColumnIndex(MediaStore.MediaColumns.DATA)
+                val iRel = if (Build.VERSION.SDK_INT >= 29) c.getColumnIndex(MediaStore.MediaColumns.RELATIVE_PATH) else -1
+                val iPending = if (Build.VERSION.SDK_INT >= 29) c.getColumnIndex(MediaStore.MediaColumns.IS_PENDING) else -1
+                val iDuration = if (video) c.getColumnIndex(MediaStore.Video.Media.DURATION) else -1
                 while (c.moveToNext()) {
                     if (iPending >= 0 && c.getInt(iPending) == 1) continue
                     val id = c.getLong(iId)
@@ -140,13 +156,15 @@ class CameraRollSource(private val context: Context) {
                         takenAtMs = taken,
                         width = c.getInt(iW),
                         height = c.getInt(iH),
+                        isVideo = video,
+                        durationMs = if (iDuration >= 0) c.getLong(iDuration) else 0,
                     )
                 }
             }
         } catch (e: SecurityException) {
-            AppLogger.info(TAG, "photo query denied: ${e.message}")
+            AppLogger.info(TAG, "${if (video) "video" else "photo"} query denied: ${e.message}")
         } catch (e: Exception) {
-            AppLogger.warning(TAG, "photo query failed: ${e.message}")
+            AppLogger.warning(TAG, "${if (video) "video" else "photo"} query failed: ${e.message}")
         }
         return out
     }

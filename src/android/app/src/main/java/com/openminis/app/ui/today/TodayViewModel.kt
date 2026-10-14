@@ -24,6 +24,9 @@ import com.openminis.app.data.photos.CameraRollSource
 import com.openminis.app.data.photos.MinisCameraCapture
 import com.openminis.app.data.photos.PhotoGrouper
 import com.openminis.app.data.photos.TimelineItem
+import com.openminis.app.data.photos.stills
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import com.openminis.app.data.species.PhotoSpecies
 import com.openminis.app.data.species.PhotoTag
 import com.openminis.app.data.species.SpeciesId
@@ -77,8 +80,21 @@ data class TodayDay(
     val weather: DayWeather? = null,
 )
 
-/** A photo just taken in the composer, waiting to be sent (SPEC §2.3). */
-data class PendingPhoto(val uri: String, val relativePath: String)
+/**
+ * A photo or video waiting in the composer (SPEC §2.3). [captured] = just
+ * taken here, so × also takes it out of the library; one picked from the
+ * library (or a group's, for "Write about this") only leaves the composer.
+ */
+data class PendingPhoto(val uri: String, val relativePath: String, val captured: Boolean = false, val isVideo: Boolean = false) {
+    companion object {
+        /** A library item going with a note: picked, or from a group. Never deleted by ×. */
+        fun of(p: CameraPhoto) = PendingPhoto(p.uri, p.relativePath, isVideo = p.isVideo)
+        fun of(p: MinisCameraCapture.Picked) = PendingPhoto(p.uri, p.relativePath, isVideo = p.isVideo)
+    }
+}
+
+/** "Write about this" on a photo group: the note goes at the group's moment, with its photos. */
+data class NoteAnchor(val atMs: Long, val place: String?, val paths: List<String>)
 
 data class TodayUiState(
     val loaded: Boolean = false,
@@ -86,6 +102,9 @@ data class TodayUiState(
     val days: List<TodayDay> = emptyList(),
     val access: CameraRollSource.Access = CameraRollSource.Access.NONE,
     val pending: List<PendingPhoto> = emptyList(),
+    /** Picked items still being matched to the library (or copied into it). */
+    val importing: Int = 0,
+    val anchor: NoteAnchor? = null,
     val locating: Set<String> = emptySet(),
     val recordLocation: Boolean = true,
     val includedAlbums: Set<String> = emptySet(),
@@ -161,6 +180,7 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
     private val _state = MutableStateFlow(
         TodayUiState(
             pending = loadPending(),
+            anchor = loadAnchor(),
             recordLocation = prefs.getBoolean(KEY_RECORD_LOCATION, true),
             includedAlbums = prefs.getStringSet(KEY_ALBUMS, emptySet()).orEmpty(),
             showWeather = prefs.getBoolean(KEY_SHOW_WEATHER, true),
@@ -267,16 +287,22 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
                 store.readDay(d)?.let { tags += PhotoSpecies.parse(it.frontMatter) }
             }
 
-            // Free photos in the window, minus attached and pending ones.
+            // An attached photo leaves its group when it was made for the note (Minis' own copy, a shot
+            // from the composer) or taken close to it; an older photo picked for a note also stays where
+            // it was — the automatic timeline does not change, the note just shows it again.
+            val shownUnderNotes = resolvedNotes.flatMap { n ->
+                n.photos.mapNotNull { (_, p) -> p?.takeIf { CameraRollRules.absorbedBy(n.atMs, it) }?.relativePath }
+            }.toSet()
+            // Free photos in the window, minus those under notes and pending ones.
             val startMs = start.atStartOfDay(zone).toInstant().toEpochMilli()
             val endMs = today.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
-            val pendingPaths = _state.value.pending.map { it.relativePath }.toSet()
+            val pendingPaths = _state.value.pending.filter { it.captured }.map { it.relativePath }.toSet()
             val photos = if (access == CameraRollSource.Access.NONE) {
                 // Minis-written photos are ours and readable without permission.
                 roll.query(startMs, endMs, included).filter { it.relativeDir.startsWith(CameraRollRules.MINIS_DIR) }
             } else {
                 roll.query(startMs, endMs, included)
-            }.filter { it.relativePath !in attachedPaths && it.relativePath !in pendingPaths }
+            }.filter { it.relativePath !in shownUnderNotes && it.relativePath !in pendingPaths }
 
             val items = PhotoGrouper.build(resolvedNotes, { it.atMs }, photos, zone)
             val showPlaces = _state.value.recordLocation
@@ -383,7 +409,7 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
         val fresh = ArrayList<List<CameraPhoto>>()
         for (g in groups) {
             val todo = ArrayList<CameraPhoto>()
-            for (p in g.group.photos) {
+            for (p in g.group.photos.stills) {
                 if (p.relativePath in _state.value.tags) continue
                 when (val cached = speciesCache.getString(p.relativePath, null)) {
                     null -> todo += p
@@ -747,7 +773,7 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Where a photo was taken, from its GPS (§6.2); null without location data. */
     suspend fun placeOf(photo: CameraPhoto): String? = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-        val ll = readLatLng(Uri.parse(photo.uri)) ?: return@withContext null
+        val ll = readLatLng(photo) ?: return@withContext null
         TodayLocation.placeName(context, ll.first, ll.second)
     }
 
@@ -783,23 +809,73 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
     fun send() {
         val text = _draft.value.trim()
         val pending = _state.value.pending
-        if (text.isEmpty() && pending.isEmpty()) return
+        val anchor = _state.value.anchor
+        if (text.isEmpty() && (pending.isEmpty() || anchor != null)) return
         setDraft("")
         setPending(emptyList())
-        if (text.isEmpty()) {
-            // No words: the photos are just library photos now (SPEC §2.3).
+        setAnchor(null)
+        if (text.isEmpty() && pending.all { it.captured }) {
+            // No words, only shots from here: they are just library photos now (SPEC §2.3).
             events.trySend(Event.Toast(com.openminis.app.R.string.today_photos_returned))
             reload()
             return
         }
+        // Picked photos are sent as they are, words or not: they would not be on the timeline otherwise.
         viewModelScope.launch {
-            val entry = store.add(text, pending.map { it.relativePath })
+            val at = anchor?.let { java.time.Instant.ofEpochMilli(it.atMs).atZone(zone).toOffsetDateTime() }
+            val entry = store.add(text, pending.map { it.relativePath }.distinct(), at)
             val date = entry.at!!.toLocalDate()
+            if (anchor != null) {
+                // Written about photos taken back then: their place, not where the phone is now.
+                anchor.place?.let { store.setAttrs(date, entry.id!!, mapOf(JournalEntry.KEY_PLACE to it)) }
+                return@launch
+            }
             if (_state.value.recordLocation) {
                 if (TodayLocation.hasPermission(context)) locate(date, entry.id!!)
                 else if (askLocationOnce()) awaitingLocation = date to entry.id!!
             }
         }
+    }
+
+    /** Long-press a photo group → "Write about this": the composer takes its photos and its moment. */
+    fun writeAbout(group: TodayGroup) {
+        val photos = group.photos.map(PendingPhoto::of)
+        val keep = _state.value.pending.filter { p -> photos.none { it.relativePath == p.relativePath } }
+        // A previous "write about" gives way: one moment per note.
+        val previous = _state.value.anchor?.paths.orEmpty().toSet()
+        setPending(keep.filter { it.relativePath !in previous } + photos)
+        setAnchor(NoteAnchor(group.photos.first().takenAtMs, group.place, photos.map { it.relativePath }))
+    }
+
+    /** × on the "Writing about" chip: back to an ordinary note, without that group's photos. */
+    fun clearAnchor() {
+        val paths = _state.value.anchor?.paths.orEmpty().toSet()
+        setPending(_state.value.pending.filter { it.relativePath !in paths })
+        setAnchor(null)
+    }
+
+    /** Items from the system picker, matched to the library (or copied in), joined to the composer. */
+    fun addPicked(uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        _state.update { it.copy(importing = it.importing + uris.size) }
+        viewModelScope.launch {
+            try {
+                val picked = importPicked(uris)
+                val have = _state.value.pending.map { it.relativePath }.toSet()
+                setPending(_state.value.pending + picked.filter { it.relativePath !in have })
+            } finally {
+                _state.update { it.copy(importing = (it.importing - uris.size).coerceAtLeast(0)) }
+            }
+        }
+    }
+
+    /** Picker URIs → pending items, matched side by side; ones that can't be read are dropped with a word. */
+    suspend fun importPicked(uris: List<Uri>): List<PendingPhoto> {
+        val out = kotlinx.coroutines.coroutineScope {
+            uris.map { u -> async(kotlinx.coroutines.Dispatchers.IO) { MinisCameraCapture.importPicked(context, u) } }.awaitAll().filterNotNull()
+        }
+        if (out.size < uris.size) events.trySend(Event.Toast(com.openminis.app.R.string.today_pick_failed))
+        return out.map(PendingPhoto::of)
     }
 
     /**
@@ -860,14 +936,15 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
         setInflight(null)
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             val uri = MinisCameraCapture.finish(context, p) ?: return@launch
-            setPending(_state.value.pending + PendingPhoto(uri.toString(), p.relativePath))
+            setPending(_state.value.pending + PendingPhoto(uri.toString(), p.relativePath, captured = true))
             events.send(Event.Toast(com.openminis.app.R.string.today_photo_saved))
         }
     }
 
-    /** × on a composer thumbnail: it was just taken, so it leaves the library too (SPEC §2.3). */
+    /** × on a composer thumbnail: one just taken leaves the library too (SPEC §2.3); a picked one only the composer. */
     fun discardPending(photo: PendingPhoto) {
         setPending(_state.value.pending - photo)
+        if (!photo.captured) return
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             MinisCameraCapture.discard(context, Uri.parse(photo.uri))
             events.send(Event.Toast(com.openminis.app.R.string.today_photo_discarded))
@@ -876,10 +953,12 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
 
     // ── Entry actions (SPEC §2.4) ─────────────────────────────────────────
 
-    fun edit(note: TodayNote, body: String) {
+    /** Save an edit: new words and/or a new set of photos. A note may be photos only, but not empty. */
+    fun edit(note: TodayNote, body: String, photos: List<String>) {
         val id = note.entry.id ?: return
-        if (body.isBlank() || body.trim() == note.entry.body) return
-        viewModelScope.launch { store.editBody(note.date, id, body) }
+        if (body.isBlank() && photos.isEmpty()) return
+        if (body.trim() == note.entry.body && photos == note.entry.photos) return
+        viewModelScope.launch { store.editBody(note.date, id, body, photos = photos.takeIf { it != note.entry.photos }) }
     }
 
     fun delete(note: TodayNote) {
@@ -1031,6 +1110,16 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
 
     suspend fun albums(): List<CameraRollSource.Album> = roll.albums()
 
+    /**
+     * Photos were allowed before videos were shown: ask for videos once,
+     * ever. True = ask now; the flag is written as the request goes out.
+     */
+    fun askVideosOnce(): Boolean {
+        if (!roll.videosMissing() || prefs.getBoolean(KEY_VIDEOS_ASKED, false)) return false
+        prefs.edit().putBoolean(KEY_VIDEOS_ASKED, true).apply()
+        return true
+    }
+
     // ── Photo place names from EXIF (SPEC §6.2) ───────────────────────────
 
     private val groupPlaces = HashMap<Long, String?>()
@@ -1040,7 +1129,7 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
         if (groupPlaces.containsKey(key)) return groupPlaces[key]
         val place = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
             for (p in photos.take(MAX_EXIF_READS)) {
-                val ll = readLatLng(Uri.parse(p.uri)) ?: continue
+                val ll = readLatLng(p) ?: continue
                 return@withContext TodayLocation.placeName(context, ll.first, ll.second)
             }
             null
@@ -1049,11 +1138,23 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
         return place
     }
 
-    /** Android 10+ redacts GPS unless we hold ACCESS_MEDIA_LOCATION and ask for the original. */
-    private fun readLatLng(uri: Uri): Pair<Double, Double>? = runCatching {
+    /**
+     * Where a photo (EXIF GPS) or a video (its location tag) was taken.
+     * Android 10+ redacts both unless we hold ACCESS_MEDIA_LOCATION and ask for the original.
+     */
+    private fun readLatLng(item: CameraPhoto): Pair<Double, Double>? = runCatching {
+        val uri = Uri.parse(item.uri)
         val source = if (Build.VERSION.SDK_INT >= 29) MediaStore.setRequireOriginal(uri) else uri
-        context.contentResolver.openInputStream(source)?.use { input ->
-            ExifInterface(input).latLong?.let { it[0] to it[1] }
+        if (item.isVideo) {
+            val r = android.media.MediaMetadataRetriever()
+            try {
+                r.setDataSource(context, source)
+                CameraRollRules.parseIso6709(r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_LOCATION))
+            } finally {
+                r.release()
+            }
+        } else {
+            context.contentResolver.openInputStream(source)?.use { input -> ExifInterface(input).latLong?.let { it[0] to it[1] } }
         }
     }.getOrNull()
 
@@ -1062,14 +1163,32 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
     private fun setPending(list: List<PendingPhoto>) {
         _state.update { it.copy(pending = list) }
         val arr = JSONArray()
-        list.forEach { arr.put(JSONObject().put("uri", it.uri).put("path", it.relativePath)) }
+        list.forEach { arr.put(JSONObject().put("uri", it.uri).put("path", it.relativePath).put("captured", it.captured).put("video", it.isVideo)) }
         prefs.edit().putString(KEY_PENDING, arr.toString()).apply()
     }
 
     private fun loadPending(): List<PendingPhoto> = runCatching {
         val arr = JSONArray(prefs.getString(KEY_PENDING, "[]"))
-        (0 until arr.length()).map { arr.getJSONObject(it).let { o -> PendingPhoto(o.getString("uri"), o.getString("path")) } }
+        (0 until arr.length()).map {
+            arr.getJSONObject(it).let { o -> PendingPhoto(o.getString("uri"), o.getString("path"), o.optBoolean("captured", true), o.optBoolean("video", false)) }
+        }
     }.getOrDefault(emptyList())
+
+    private fun setAnchor(a: NoteAnchor?) {
+        _state.update { it.copy(anchor = a) }
+        val e = prefs.edit()
+        if (a == null) e.remove(KEY_ANCHOR) else e.putString(
+            KEY_ANCHOR,
+            JSONObject().put("at", a.atMs).put("place", a.place ?: JSONObject.NULL).put("paths", JSONArray(a.paths)).toString(),
+        )
+        e.apply()
+    }
+
+    private fun loadAnchor(): NoteAnchor? = runCatching {
+        val o = JSONObject(prefs.getString(KEY_ANCHOR, null) ?: return null)
+        val paths = o.getJSONArray("paths").let { a -> (0 until a.length()).map { a.getString(it) } }
+        NoteAnchor(o.getLong("at"), o.optString("place").takeIf { !o.isNull("place") && it.isNotEmpty() }, paths)
+    }.getOrNull()
 
     private fun setInflight(p: MinisCameraCapture.Pending?) {
         inflightCapture = p
@@ -1100,6 +1219,8 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
             context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_RECORD_LOCATION, true)
         private const val KEY_DRAFT = "draft"
         private const val KEY_PENDING = "pending"
+        private const val KEY_ANCHOR = "anchor"
+        private const val KEY_VIDEOS_ASKED = "videosAsked"
         private const val KEY_INFLIGHT = "inflight"
         private const val KEY_RECORD_LOCATION = "recordLocation"
         private const val KEY_LOCATION_ASKED = "locationAsked"

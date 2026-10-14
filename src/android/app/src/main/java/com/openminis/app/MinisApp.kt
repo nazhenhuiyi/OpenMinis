@@ -1033,6 +1033,9 @@ class MinisApp : Application(), ImageLoaderFactory {
                 // minis://attachments/foo.jpg invalidate Coil's cached bitmap.
                 add(MinisImageFetcher.MtimeKeyer())
                 add(MinisImageFetcher.StringMtimeKeyer())
+                // Video stills on the Today timeline.
+                add(com.openminis.app.data.photos.VideoThumb.Fetch.Factory())
+                add(com.openminis.app.data.photos.VideoThumb.Key())
             }
             .build()
 

@@ -8,13 +8,16 @@ import android.os.Build
 import android.provider.MediaStore
 import android.text.format.DateFormat
 import android.widget.Toast
+import android.widget.VideoView
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,11 +29,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
@@ -44,6 +47,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.outlined.AddPhotoAlternate
 import androidx.compose.material.icons.outlined.CameraAlt
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Delete
@@ -65,6 +70,8 @@ import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -80,6 +87,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -88,6 +97,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -99,6 +110,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.Lifecycle
@@ -108,23 +120,32 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.openminis.app.R
-import com.openminis.app.ui.chat.InputCircleButton
-import com.openminis.app.ui.theme.ChatColors
 import com.openminis.app.data.photos.CameraPhoto
 import com.openminis.app.data.photos.CameraRollRules
 import com.openminis.app.data.photos.CameraRollSource
-import kotlinx.coroutines.launch
+import com.openminis.app.data.photos.VideoThumb
+import com.openminis.app.data.photos.stills
+import com.openminis.app.ui.chat.InputCircleButton
+import com.openminis.app.ui.theme.ChatColors
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+
+/** At most this many items per pick from the library, like a photo post elsewhere. */
+private const val MAX_PICK = 9
 
 /** A timeline suggestion opened on its "What is it?" page: the photos it covers, the guess, and the whole group. */
 private class WhatIs(val photos: List<CameraPhoto>, val suggestion: SpeciesSuggestion, val group: List<CameraPhoto>)
 
 /** "Identify" (§17.3) on [photos], starting on [start] (null = where it suggests), without [rejected] — [undo] takes that no back. */
-private class Identify(val photos: List<CameraPhoto>, val start: CameraPhoto?, val rejected: String? = null, val undo: (() -> Unit)? = null)
+private class Identify(photos: List<CameraPhoto>, val start: CameraPhoto?, val rejected: String? = null, val undo: (() -> Unit)? = null) {
+    /** Species ID looks at photos only: any video handed in is left out here, whoever opens it. */
+    val photos = photos.stills
+}
 
 /** What a long-press acted on: a note, or a photo group. */
 private sealed interface Target {
@@ -172,12 +193,16 @@ fun TodayScreen(
     val requestPhotos = {
         photosLauncher.launch(
             when {
-                Build.VERSION.SDK_INT >= 34 -> arrayOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED)
-                Build.VERSION.SDK_INT >= 33 -> arrayOf(Manifest.permission.READ_MEDIA_IMAGES)
+                Build.VERSION.SDK_INT >= 34 -> arrayOf(
+                    Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED,
+                )
+                Build.VERSION.SDK_INT >= 33 -> arrayOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO)
                 else -> arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
             },
         )
     }
+    // Photos allowed before videos were shown: the same request once more, for videos (same group, usually no dialog).
+    LaunchedEffect(state.access) { if (vm.askVideosOnce()) requestPhotos() }
     val locationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
         vm.onLocationPermissionResult(result.values.any { it })
     }
@@ -214,6 +239,19 @@ fun TodayScreen(
             android.content.pm.PackageManager.PERMISSION_GRANTED
         ) launchCamera() else cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
     }
+
+    // ── Photos from the library (system picker: no permission needed) ──
+    // Edited photos of the note being edited; null = not editing. Lives here so the picker can add to it.
+    var editPhotos by remember { mutableStateOf<List<PendingPhoto>?>(null) }
+    val composerPick = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(MAX_PICK), vm::addPicked)
+    val editPick = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(MAX_PICK)) { uris ->
+        if (uris.isNotEmpty()) scope.launch {
+            val added = vm.importPicked(uris)
+            editPhotos = editPhotos?.let { cur -> cur + added.filter { a -> cur.none { it.relativePath == a.relativePath } } }
+        }
+    }
+    val photosAndVideos = PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
+    val composerFocus = remember { FocusRequester() }
 
     // The check-in sheet, and which habit's adjust panel it shows (null = the list).
     var sheetOpen by remember { mutableStateOf(false) }
@@ -337,6 +375,10 @@ fun TodayScreen(
                                 locating = row.note.entry.id in state.locating,
                                 showPlace = state.recordLocation,
                                 editing = editingId != null && editingId == row.note.entry.id,
+                                // Only the row being edited gets them: an edit doesn't recompose every note.
+                                editPhotos = if (editingId == row.note.entry.id) editPhotos.orEmpty() else emptyList(),
+                                onRemoveEditPhoto = { p -> editPhotos = editPhotos?.minus(p) },
+                                onAddEditPhotos = { runCatching { editPick.launch(photosAndVideos) } },
                                 onLongPress = { sheetTarget = Target.Note(row.note) },
                                 onOpenPhotos = { i ->
                                     // Missing photos are not shown in the viewer; map the tapped
@@ -345,10 +387,13 @@ fun TodayScreen(
                                     val start = row.note.photos.take(i).count { it.second != null }
                                     if (shown.isNotEmpty()) viewer = shown to start.coerceAtMost(shown.lastIndex)
                                 },
-                                onSaveEdit = { text -> vm.edit(row.note, text); editingId = null },
+                                onSaveEdit = { text ->
+                                    vm.edit(row.note, text, editPhotos.orEmpty().map { it.relativePath })
+                                    editingId = null; editPhotos = null
+                                },
                                 onSpecies = { latin -> nature = latin; showNature = true },
                                 tags = state.tags,
-                                onCancelEdit = { editingId = null },
+                                onCancelEdit = { editingId = null; editPhotos = null },
                             )
                             is TodayRow.Group -> {
                                 // One suggestion per kind found in the group, its photos together (§17.2).
@@ -395,9 +440,15 @@ fun TodayScreen(
             Composer(
                 draft = draft,
                 pending = state.pending,
+                importing = state.importing,
+                anchor = state.anchor,
+                zone = zone,
+                focus = composerFocus,
                 onDraft = vm::setDraft,
                 onCamera = onCamera,
+                onPick = { runCatching { composerPick.launch(photosAndVideos) } },
                 onDiscard = vm::discardPending,
+                onClearAnchor = vm::clearAnchor,
                 onSend = vm::send,
             )
         }
@@ -420,17 +471,21 @@ fun TodayScreen(
                 val (text, uris) = askPayload(context, target, zone)
                 onAskMinis(text, uris)
             }
-            val hasPhotos = when (target) {
-                is Target.Note -> target.note.photos.any { it.second != null }
-                is Target.Group -> true
+            val stills = when (target) {
+                is Target.Note -> target.note.photos.mapNotNull { it.second }
+                is Target.Group -> target.group.photos
+            }.stills
+            if (target is Target.Group) {
+                SheetItem(Icons.Outlined.Edit, stringResource(R.string.today_menu_write_about)) {
+                    close()
+                    vm.writeAbout(target.group)
+                    scope.launch { runCatching { composerFocus.requestFocus() } }
+                }
             }
-            if (state.speciesReady && hasPhotos) {
+            if (state.speciesReady && stills.isNotEmpty()) {
                 SheetItem(Icons.Outlined.Eco, stringResource(R.string.today_menu_identify)) {
                     close()
-                    identifying = when (target) {
-                        is Target.Note -> Identify(target.note.photos.mapNotNull { it.second }, null)
-                        is Target.Group -> Identify(target.group.photos, null)
-                    }
+                    identifying = Identify(stills, null)
                 }
             }
             when (target) {
@@ -438,6 +493,8 @@ fun TodayScreen(
                     val editable = target.note.editable
                     SheetItem(Icons.Outlined.Edit, stringResource(R.string.today_menu_edit), enabled = editable) {
                         close(); editingId = target.note.entry.id
+                        // One not on this phone keeps its place (no picture), so saving doesn't drop it.
+                        editPhotos = target.note.photos.map { (path, p) -> p?.let(PendingPhoto::of) ?: PendingPhoto("", path) }
                     }
                     SheetItem(Icons.Outlined.ContentCopy, stringResource(R.string.today_menu_copy)) {
                         close()
@@ -458,10 +515,10 @@ fun TodayScreen(
                 }
                 is Target.Group -> SheetItem(Icons.Outlined.Image, stringResource(R.string.today_menu_open_album)) {
                     close()
-                    val uri = Uri.parse(target.group.photos.first().uri)
+                    val first = target.group.photos.first()
                     runCatching {
                         context.startActivity(
-                            Intent(Intent.ACTION_VIEW).setDataAndType(uri, "image/*")
+                            Intent(Intent.ACTION_VIEW).setDataAndType(Uri.parse(first.uri), if (first.isVideo) "video/*" else "image/*")
                                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK),
                         )
                     }
@@ -576,11 +633,11 @@ private fun askPayload(context: android.content.Context, target: Target, zone: Z
             val at = Instant.ofEpochMilli(target.note.atMs).atZone(zone)
             val quote = target.note.entry.body.lines().joinToString("\n") { "> $it" }
             context.getString(R.string.today_ask_quote_note, hm.format(at), target.note.entry.id.orEmpty()) + "\n" + quote + "\n\n" to
-                target.note.photos.mapNotNull { it.second?.uri }
+                target.note.photos.mapNotNull { it.second }.stills.map { it.uri }
         }
         is Target.Group -> {
             val at = Instant.ofEpochMilli(target.group.photos.first().takenAtMs).atZone(zone)
-            context.getString(R.string.today_ask_quote_photos, hm.format(at)) + "\n\n" to target.group.photos.map { it.uri }
+            context.getString(R.string.today_ask_quote_photos, hm.format(at)) + "\n\n" to target.group.photos.stills.map { it.uri }
         }
     }
 }
@@ -747,6 +804,9 @@ private fun NoteRow(
     locating: Boolean,
     showPlace: Boolean,
     editing: Boolean,
+    editPhotos: List<PendingPhoto>,
+    onRemoveEditPhoto: (PendingPhoto) -> Unit,
+    onAddEditPhotos: () -> Unit,
     onLongPress: () -> Unit,
     onOpenPhotos: (Int) -> Unit,
     onSaveEdit: (String) -> Unit,
@@ -771,15 +831,21 @@ private fun NoteRow(
                 onValueChange = { text = it },
                 modifier = Modifier.fillMaxWidth().testTag("today_edit_field"),
             )
+            // Photos come and go while editing; removing one only unhooks it, the library keeps it.
+            Spacer(Modifier.height(8.dp))
+            PendingStrip(editPhotos, onRemove = onRemoveEditPhoto, onAdd = onAddEditPhotos)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                 TextButton(onClick = onCancelEdit) { Text(stringResource(R.string.today_cancel)) }
-                TextButton(onClick = { onSaveEdit(text) }) { Text(stringResource(R.string.today_save)) }
+                TextButton(onClick = { onSaveEdit(text) }, enabled = text.isNotBlank() || editPhotos.isNotEmpty()) {
+                    Text(stringResource(R.string.today_save))
+                }
             }
-        } else {
-            Text(note.entry.body, style = MaterialTheme.typography.bodyLarge.copy(lineHeight = 26.sp))
+            return@TimelineRow
         }
+        val hasBody = note.entry.body.isNotBlank()
+        if (hasBody) Text(note.entry.body, style = MaterialTheme.typography.bodyLarge.copy(lineHeight = 26.sp))
         if (note.photos.isNotEmpty()) {
-            Spacer(Modifier.height(10.dp))
+            if (hasBody) Spacer(Modifier.height(10.dp))
             PhotoGrid(note.photos.map { it.second }, onClick = onOpenPhotos, tags = tags, onTag = onSpecies)
         }
         note.entry.species?.let { latin ->
@@ -939,12 +1005,76 @@ private fun Thumb(photo: CameraPhoto?, modifier: Modifier, onClick: () -> Unit, 
         return
     }
     val context = LocalContext.current
-    AsyncImage(
-        model = ImageRequest.Builder(context).data(Uri.parse(photo.uri)).size(if (big) 900 else 360).crossfade(true).build(),
-        contentDescription = photo.displayName,
-        contentScale = ContentScale.Crop,
-        modifier = modifier.background(MaterialTheme.colorScheme.surfaceVariant).clickable(onClick = onClick).testTag("today_thumb"),
-    )
+    Box(modifier) {
+        AsyncImage(
+            model = ImageRequest.Builder(context).data(VideoThumb.model(photo.uri, photo.isVideo)).size(if (big) 900 else 360).crossfade(true).build(),
+            contentDescription = photo.displayName,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceVariant).clickable(onClick = onClick).testTag("today_thumb"),
+        )
+        if (photo.isVideo) VideoBadge(photo.durationMs.takeIf { it > 0 }, big, Modifier.align(Alignment.BottomEnd))
+    }
+}
+
+/** ▶ 0:23 in the corner of a video's still. */
+@Composable
+private fun VideoBadge(durationMs: Long?, big: Boolean, modifier: Modifier = Modifier) {
+    Row(
+        modifier.padding(if (big) 10.dp else 6.dp).clip(RoundedCornerShape(50)).background(Color(0x99000000))
+            .padding(start = 4.dp, end = if (durationMs != null) 7.dp else 4.dp, top = 2.dp, bottom = 2.dp)
+            .testTag("today_video_badge"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Filled.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(if (big) 16.dp else 13.dp))
+        if (durationMs != null) Text(VideoThumb.duration(durationMs), color = Color.White, fontSize = if (big) 12.sp else 10.sp)
+    }
+}
+
+/**
+ * Thumbnails waiting to go with a note — in the composer, or while editing
+ * one — each with an ×, and [onAdd] (if any) as a last "+" tile.
+ */
+@Composable
+private fun PendingStrip(items: List<PendingPhoto>, onRemove: (PendingPhoto) -> Unit, onAdd: (() -> Unit)? = null, importing: Int = 0, modifier: Modifier = Modifier) {
+    LazyRow(modifier.testTag("today_pending"), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        items(items, key = { it.relativePath }) { p ->
+            Box(Modifier.size(64.dp)) {
+                if (p.uri.isEmpty()) {
+                    // Not on this phone: kept, so saving an edit doesn't drop the reference.
+                    Box(Modifier.fillMaxSize().clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.surfaceVariant))
+                } else {
+                    AsyncImage(
+                        model = VideoThumb.model(p.uri, p.isVideo),
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.surfaceVariant),
+                    )
+                }
+                if (p.isVideo) VideoBadge(null, big = false, modifier = Modifier.align(Alignment.BottomStart))
+                Box(
+                    Modifier.align(Alignment.TopEnd).offset(x = 4.dp, y = (-4).dp).size(20.dp).clip(CircleShape)
+                        .background(Color(0xCC222222)).clickable { onRemove(p) }.testTag("today_pending_remove"),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.today_remove_photo), tint = Color.White, modifier = Modifier.size(12.dp))
+                }
+            }
+        }
+        if (importing > 0) item(key = "importing") {
+            Box(Modifier.size(64.dp).clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.surfaceVariant), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+            }
+        }
+        if (onAdd != null) item(key = "add") {
+            Box(
+                Modifier.size(64.dp).clip(RoundedCornerShape(10.dp)).border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(10.dp))
+                    .clickable(onClick = onAdd).testTag("today_edit_add_photos"),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Outlined.AddPhotoAlternate, contentDescription = stringResource(R.string.today_add_photos), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
 }
 
 @Composable
@@ -996,12 +1126,19 @@ private fun PartialBanner(onManage: () -> Unit) {
 private fun Composer(
     draft: String,
     pending: List<PendingPhoto>,
+    importing: Int,
+    anchor: NoteAnchor?,
+    zone: ZoneId,
+    focus: FocusRequester,
     onDraft: (String) -> Unit,
     onCamera: () -> Unit,
+    onPick: () -> Unit,
     onDiscard: (PendingPhoto) -> Unit,
+    onClearAnchor: () -> Unit,
     onSend: () -> Unit,
 ) {
-    val canSend = draft.isNotBlank() || pending.isNotEmpty()
+    // Picked photos go even without words; "write about this" needs the words — the photos are already there.
+    val canSend = importing == 0 && (draft.isNotBlank() || (pending.isNotEmpty() && anchor == null))
     val shape = RoundedCornerShape(24.dp)
     Box(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.background).padding(horizontal = 12.dp, vertical = 8.dp)) {
         Surface(
@@ -1012,34 +1149,33 @@ private fun Composer(
             modifier = Modifier.fillMaxWidth(),
         ) {
             Column {
-                if (pending.isNotEmpty()) {
-                    LazyRow(
-                        Modifier.padding(start = 12.dp, end = 12.dp, top = 12.dp).testTag("today_pending"),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                if (anchor != null) {
+                    // Which moment this note will be written at: the group's, not now.
+                    val at = remember(anchor.atMs) {
+                        val t = Instant.ofEpochMilli(anchor.atMs).atZone(zone)
+                        val today = LocalDate.now(zone)
+                        (if (t.toLocalDate() == today) "" else dayLabel(t.toLocalDate()) + " ") + DateTimeFormatter.ofPattern("HH:mm").format(t)
+                    }
+                    Row(
+                        Modifier.padding(start = 14.dp, end = 8.dp, top = 10.dp).testTag("today_anchor"),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        items(pending, key = { it.uri }) { p ->
-                            Box(Modifier.size(64.dp)) {
-                                AsyncImage(
-                                    model = Uri.parse(p.uri),
-                                    contentDescription = null,
-                                    contentScale = ContentScale.Crop,
-                                    modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.surfaceVariant),
-                                )
-                                Box(
-                                    Modifier.align(Alignment.TopEnd).offset(x = 4.dp, y = (-4).dp).size(20.dp).clip(CircleShape)
-                                        .background(Color(0xCC222222)).clickable { onDiscard(p) }.testTag("today_pending_remove"),
-                                    contentAlignment = Alignment.Center,
-                                ) {
-                                    Icon(
-                                        Icons.Filled.Close,
-                                        contentDescription = stringResource(R.string.today_remove_photo),
-                                        tint = Color.White,
-                                        modifier = Modifier.size(12.dp),
-                                    )
-                                }
-                            }
+                        Text(
+                            stringResource(R.string.today_writing_about, at),
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f, fill = false),
+                        )
+                        IconButton(onClick = onClearAnchor, modifier = Modifier.size(24.dp).testTag("today_anchor_clear")) {
+                            Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.today_cancel), modifier = Modifier.size(14.dp))
                         }
                     }
+                }
+                if (pending.isNotEmpty() || importing > 0) {
+                    PendingStrip(
+                        pending, onRemove = onDiscard, importing = importing,
+                        modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 12.dp),
+                    )
                 }
                 TextField(
                     value = draft,
@@ -1054,7 +1190,7 @@ private fun Composer(
                         focusedIndicatorColor = Color.Transparent,
                         unfocusedIndicatorColor = Color.Transparent,
                     ),
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("today_input"),
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).focusRequester(focus).testTag("today_input"),
                 )
                 Row(
                     Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, bottom = 10.dp),
@@ -1066,6 +1202,15 @@ private fun Composer(
                             contentDescription = stringResource(R.string.today_take_photo),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(20.dp),
+                        )
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    InputCircleButton(onClick = onPick) {
+                        Icon(
+                            Icons.Outlined.Image,
+                            contentDescription = stringResource(R.string.today_pick_photos),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp).testTag("today_pick"),
                         )
                     }
                     Spacer(Modifier.weight(1f))
@@ -1130,26 +1275,31 @@ private fun PhotoViewer(
                     }
                 }
                 HorizontalPager(state = pager, modifier = Modifier.weight(1f).testTag("today_viewer_pager")) { page ->
-                    AsyncImage(
-                        model = Uri.parse(photos[page].uri),
-                        contentDescription = photos[page].displayName,
-                        contentScale = ContentScale.Fit,
-                        modifier = Modifier.fillMaxSize(),
-                    )
+                    if (photos[page].isVideo) {
+                        VideoPage(photos[page], active = pager.currentPage == page)
+                    } else {
+                        AsyncImage(
+                            model = Uri.parse(photos[page].uri),
+                            contentDescription = photos[page].displayName,
+                            contentScale = ContentScale.Fit,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
                 }
                 val p = photos[pager.currentPage]
                 Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 16.dp, vertical = 12.dp)) {
                     // Species and "Identify" get their own row, so the file name never squeezes them (§17.3).
                     val tag = tags[p.relativePath]
-                    if (tag != null || onIdentify != null) {
+                    val identify = onIdentify?.takeIf { !p.isVideo }
+                    if (tag != null || identify != null) {
                         Row(Modifier.fillMaxWidth().padding(bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                             if (tag != null) {
                                 SpeciesTag(tag, big = true, onClick = { onTag(tag.latin) }, modifier = Modifier.widthIn(max = 240.dp), onDark = true)
                             }
                             Spacer(Modifier.weight(1f))
-                            if (onIdentify != null) {
+                            if (identify != null) {
                                 Row(
-                                    Modifier.clip(RoundedCornerShape(50)).background(Color(0x33FFFFFF)).clickable { onIdentify(p) }
+                                    Modifier.clip(RoundedCornerShape(50)).background(Color(0x33FFFFFF)).clickable { identify(p) }
                                         .padding(horizontal = 14.dp, vertical = 8.dp).testTag("today_viewer_identify"),
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
@@ -1169,6 +1319,96 @@ private fun PhotoViewer(
                     )
                 }
             }
+        }
+    }
+}
+
+/**
+ * A video in the viewer: its still and a ▶ until tapped, then it plays in
+ * place. Tap to pause or resume; the bar below seeks. Swiping to another page
+ * stops it.
+ */
+@Composable
+private fun VideoPage(video: CameraPhoto, active: Boolean) {
+    var started by remember { mutableStateOf(false) }
+    LaunchedEffect(active) { if (!active) started = false }
+    Box(Modifier.fillMaxSize().testTag("today_viewer_video"), contentAlignment = Alignment.Center) {
+        if (!started) {
+            AsyncImage(
+                model = VideoThumb.model(video.uri, true),
+                contentDescription = video.displayName,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.fillMaxSize(),
+            )
+            Box(
+                Modifier.size(64.dp).clip(CircleShape).background(Color(0x66000000)).clickable { started = true }.testTag("today_video_play"),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Filled.PlayArrow, contentDescription = stringResource(R.string.today_play_video), tint = Color.White, modifier = Modifier.size(40.dp))
+            }
+            return@Box
+        }
+        var player by remember { mutableStateOf<VideoView?>(null) }
+        var playing by remember { mutableStateOf(true) }
+        var position by remember { mutableIntStateOf(0) }
+        var duration by remember { mutableIntStateOf(video.durationMs.toInt()) }
+        var seeking by remember { mutableStateOf<Float?>(null) }
+        // Fit the screen at the video's own shape (from the player once prepared: it knows the rotation).
+        var ratio by remember { mutableFloatStateOf(if (video.width > 0 && video.height > 0) video.width.toFloat() / video.height else 16f / 9f) }
+        // The bar follows the video only while it plays.
+        LaunchedEffect(player, playing) {
+            val v = player ?: return@LaunchedEffect
+            while (playing) {
+                runCatching { if (seeking == null) position = v.currentPosition }
+                delay(200)
+            }
+        }
+        AndroidView(
+            factory = { ctx ->
+                VideoView(ctx).apply {
+                    setVideoURI(Uri.parse(video.uri))
+                    setOnPreparedListener { mp ->
+                        if (mp.videoWidth > 0 && mp.videoHeight > 0) ratio = mp.videoWidth.toFloat() / mp.videoHeight
+                        duration = mp.duration.coerceAtLeast(0); start(); playing = true
+                    }
+                    setOnCompletionListener { playing = false; position = duration }
+                    setOnErrorListener { _, _, _ -> playing = false; true }
+                    player = this
+                }
+            },
+            onRelease = { it.stopPlayback(); player = null },
+            // Largest box of that shape that fits: full width, or full height for a tall video.
+            modifier = Modifier.aspectRatio(ratio),
+        )
+        // Tap anywhere: pause / resume (from the start again once it has ended).
+        Box(
+            Modifier.fillMaxSize().clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                val v = player ?: return@clickable
+                runCatching {
+                    if (v.isPlaying) { v.pause(); playing = false }
+                    else { if (duration in 1..position + 300) v.seekTo(0); v.start(); playing = true }
+                }
+            },
+        )
+        if (!playing) {
+            Icon(Icons.Filled.PlayArrow, contentDescription = null, tint = Color.White.copy(alpha = 0.85f), modifier = Modifier.size(56.dp))
+        }
+        Row(
+            Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(VideoThumb.duration((seeking?.toLong() ?: position.toLong())), color = Color.White, fontSize = 11.sp)
+            Slider(
+                value = seeking ?: position.toFloat(),
+                onValueChange = { seeking = it },
+                onValueChangeFinished = { seeking?.let { t -> runCatching { player?.seekTo(t.toInt()) }; position = t.toInt() }; seeking = null },
+                valueRange = 0f..duration.coerceAtLeast(1).toFloat(),
+                colors = SliderDefaults.colors(
+                    thumbColor = Color.White, activeTrackColor = Color.White, inactiveTrackColor = Color.White.copy(alpha = 0.3f),
+                ),
+                modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+            )
+            Text(VideoThumb.duration(duration.toLong()), color = Color.White, fontSize = 11.sp)
         }
     }
 }

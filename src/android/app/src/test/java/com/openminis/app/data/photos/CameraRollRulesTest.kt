@@ -1,6 +1,8 @@
 package com.openminis.app.data.photos
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Assert.assertNull
 import org.junit.Test
 import java.time.LocalDateTime
@@ -52,6 +54,44 @@ class CameraRollRulesTest {
         val other = photo(t(16, 20) + 2_000, "DCIM/Camera/", w = 1920, h = 1080)
         val later = photo(t(16, 21), "DCIM/Camera/")
         assertEquals(listOf(minis, other, later), CameraRollRules.dedupe(listOf(minis, copy, rotated, other, later)))
+    }
+
+    @Test
+    fun aNoteTakesInItsOwnAndNearbyPhotosOnly() {
+        val note = t(18, 0)
+        assertTrue(CameraRollRules.absorbedBy(note, photo(t(17, 50))))
+        assertTrue(CameraRollRules.absorbedBy(note, photo(t(15, 0))))
+        // Picked from days ago: stays in its own day's group too.
+        assertFalse(CameraRollRules.absorbedBy(note, photo(t(9, 0, day = 9))))
+        // Minis' own file (a composer shot, a copy for a note) belongs to the note whatever its date.
+        assertTrue(CameraRollRules.absorbedBy(note, photo(t(9, 0, day = 9), "DCIM/Minis/")))
+    }
+
+    @Test
+    fun videoLocationTag() {
+        assertEquals(31.2304 to 121.4737, CameraRollRules.parseIso6709("+31.2304+121.4737/"))
+        assertEquals(-33.8688 to 151.2093, CameraRollRules.parseIso6709("-33.8688+151.2093+012.500/"))
+        assertEquals(40.7128 to -74.006, CameraRollRules.parseIso6709("+40.7128-074.0060/"))
+        assertNull(CameraRollRules.parseIso6709("+00.0000+000.0000/"))
+        assertNull(CameraRollRules.parseIso6709(""))
+        assertNull(CameraRollRules.parseIso6709(null))
+    }
+
+    @Test
+    fun aVideoIsNeverTakenForTheCopyOfAPhoto() {
+        val minis = photo(t(16, 20), "DCIM/Minis/")
+        // Same moment, same size: still a video the user shot, not a duplicate of the photo.
+        val video = photo(t(16, 20) + 1_000, "DCIM/Camera/").copy(isVideo = true, durationMs = 12_000)
+        assertEquals(listOf(minis, video), CameraRollRules.dedupe(listOf(minis, video)))
+    }
+
+    @Test
+    fun videosGroupWithPhotosLikeAnyShot() {
+        val a = photo(t(9, 0))
+        val v = photo(t(9, 20)).copy(isVideo = true)
+        val b = photo(t(9, 40))
+        val items = PhotoGrouper.build(emptyList<N>(), { it.at }, listOf(a, v, b), zone)
+        assertEquals(listOf(listOf(a, v, b)), items.map { (it as TimelineItem.PhotoGroup).photos })
     }
 
     // ── §5.2 ──

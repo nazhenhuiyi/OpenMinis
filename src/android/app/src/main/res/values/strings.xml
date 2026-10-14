@@ -2355,6 +2355,12 @@
     <string name="backup_journal_photos_note">Today Journal photos stay in your photo library and are backed up with it, not in this package.</string>
     <string name="today_by_minis">by Minis</string>
     <string name="today_remove_photo">Remove photo</string>
+    <string name="today_pick_photos">Add from Photos</string>
+    <string name="today_pick_failed">Some items couldn\'t be added</string>
+    <string name="today_menu_write_about">Write about this</string>
+    <string name="today_writing_about">About the photos from %1$s</string>
+    <string name="today_add_photos">Add photos</string>
+    <string name="today_play_video">Play video</string>
     <string name="shared_folder_name_journal">Today Journal</string>
     <string name="today_habits_title">Today\'s check-ins</string>
     <string name="today_habits_progress">%1$d/%2$d</string>

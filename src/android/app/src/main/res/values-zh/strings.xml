@@ -2161,6 +2161,12 @@
     <string name="backup_journal_photos_note">「今日」的照片由系统相册备份，不包含在这里。</string>
     <string name="today_by_minis">Minis 写的</string>
     <string name="today_remove_photo">移除照片</string>
+    <string name="today_pick_photos">从相册选</string>
+    <string name="today_pick_failed">有几项没能加进来</string>
+    <string name="today_menu_write_about">写点什么</string>
+    <string name="today_writing_about">写给 %1$s 的照片</string>
+    <string name="today_add_photos">添加照片</string>
+    <string name="today_play_video">播放视频</string>
     <string name="shared_folder_name_journal">今日记录</string>
     <string name="today_habits_title">今日打卡</string>
     <string name="today_habits_progress">%1$d/%2$d</string>
