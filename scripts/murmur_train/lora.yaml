@@ -1,0 +1,21 @@
+# mlx_lm.lora config — run: ~/venvs/mlx/bin/mlx_lm.lora -c scripts/murmur_train/lora.yaml
+model: /Users/zilin/models/Qwen3-0.6B-hf
+train: true
+data: scripts/murmur_train/out
+adapter_path: scripts/murmur_train/out/run5
+mask_prompt: true
+fine_tune_type: lora
+num_layers: -1
+batch_size: 8
+iters: 500
+learning_rate: 5e-5
+steps_per_report: 20
+steps_per_eval: 50
+save_every: 50
+max_seq_length: 512
+grad_checkpoint: false
+seed: 0
+lora_parameters:
+  rank: 16
+  scale: 10.0
+  dropout: 0.05
