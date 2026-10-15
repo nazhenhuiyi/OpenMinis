@@ -7,6 +7,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.security.MessageDigest
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 /**
  * [T-today-murmur] What the model and the cloud said about each murmur, by
@@ -25,6 +27,10 @@ class MurmurIndex private constructor(context: Context) {
     private val suggestionsFile = File(context.filesDir, "murmur/suggestions.json")
     private val tags = HashMap<String, Pair<String, MurmurTags>>()
     private val suggestions = HashMap<String, MurmurSuggestion>()
+
+    private val _tagChanges = kotlinx.coroutines.flow.MutableStateFlow(0)
+    /** Goes up each time a murmur's tags are written (探索 rebuilds on it, §20). */
+    val tagChanges: kotlinx.coroutines.flow.StateFlow<Int> = _tagChanges
 
     init {
         read(tagsFile)?.let { o ->
@@ -48,15 +54,32 @@ class MurmurIndex private constructor(context: Context) {
 
     @Synchronized fun putTags(id: String, body: String, t: MurmurTags) {
         tags[id] = hash(body) to t
-        write(tagsFile, JSONObject().apply {
-            for ((k, v) in tags) put(k, JSONObject().apply {
-                val x = v.second
-                put("v", MurmurLlm.MODEL_VERSION); put("h", v.first)
-                put("i", x.intent); put("m", x.mood); put("a", JSONArray(x.aspects))
-                put("n", JSONArray(x.mentions.map { JSONArray(listOf(it.first, it.second)) }))
-                put("hl", x.highlight); put("p", x.actScore.toDouble())
-            })
-        })
+        _tagChanges.value++
+        // Tags are derived and may be lost, so writes are gathered: a backlog of
+        // hundreds is one write every few seconds, not one whole-file rewrite each.
+        if (!saveScheduled) {
+            saveScheduled = true
+            saver.schedule(::saveTags, SAVE_DELAY_MS, TimeUnit.MILLISECONDS)
+        }
+    }
+
+    private var saveScheduled = false
+    private val saver = Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "murmur-tags").apply { isDaemon = true } }
+
+    private fun saveTags() {
+        val o = synchronized(this) {
+            saveScheduled = false
+            JSONObject().apply {
+                for ((k, v) in tags) put(k, JSONObject().apply {
+                    val x = v.second
+                    put("v", MurmurLlm.MODEL_VERSION); put("h", v.first)
+                    put("i", x.intent); put("m", x.mood); put("a", JSONArray(x.aspects))
+                    put("n", JSONArray(x.mentions.map { JSONArray(listOf(it.first, it.second)) }))
+                    put("hl", x.highlight); put("p", x.actScore.toDouble())
+                })
+            }
+        }
+        write(tagsFile, o)
     }
 
     /** The suggestion for this text; one made for an earlier version of the text no longer applies. */
@@ -77,6 +100,7 @@ class MurmurIndex private constructor(context: Context) {
 
     companion object {
         private const val TAG = "MurmurIndex"
+        private const val SAVE_DELAY_MS = 3_000L
         @Volatile private var instance: MurmurIndex? = null
 
         fun get(context: Context): MurmurIndex = instance ?: synchronized(this) {

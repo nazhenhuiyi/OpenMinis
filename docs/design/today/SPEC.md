@@ -1081,15 +1081,15 @@ weather_updated: "2026-10-12T08:00:00+08:00"
 
 ### 20.2 实现
 
-- Tab：`MainTabs.Tab.EXPLORE`，和今日一样是盖在 NavHost 上面的一层（见 MainTabs）；和今日共用同一个 `TodayViewModel`。
+- Tab：`MainTabs.Tab.EXPLORE`，和今日一样是盖在 NavHost 上面的一层（见 MainTabs）。同一时间只组合正在显示的 tab，但 AppNavigation 用 `rememberSaveableStateHolder` 给每个 tab 保存状态，所以切回来时滚动位置还在。今日只有在离开期间有新内容时才会滚到最新一条。
+- 状态：`ui/today/ExploreViewModel.kt`，独立的 ViewModel，Activity 存在期间一直保留。
+  - 物种图鉴和吃喝碎碎念通过 `ExploreSources` 接口从 `TodayViewModel` 读取，这样可以复用今日已经建好的缓存。
+  - 整页数据（`ExploreData`）在后台一次算好再交给界面：日记只读一遍，图鉴同时计算。
+  - **何时重算**：只在探索显示在屏幕上时计算。打开时，以及日记、照片、碎碎念标签（`MurmurIndex.tagChanges`，只在真正写入标签时增加）有变化或换了一天时，重算一次；短时间内的多次变化等 0.6 秒合并成一次。不在屏幕上时的变化先记着，下次打开时如有变化补算一次。在手机上算一次 70～90 毫秒。
+  - **启动时不算**：第一次打开探索时才开始算，这期间显示页面轮廓，算好后整页一起淡入。
+  - 翻到第几页也由它管理：存在 prefs `today_explore`（日期、页码）里，换了一天就回到第一页。
 - 规则：`ui/today/Explore.kt`（`pages` / `facts` / `firsts`），测试在 `ExploreTest`。
-- 界面：`ui/today/ExploreUi.kt`；翻页进度存在 prefs `today_explore` 里（day、page）。
-- 加载：整页数据（`ExploreData`）由 `TodayViewModel.refreshExplore()` 在后台一次算好，再一次性交给界面，不会一块一块往外冒。
-  - 日记只读一遍，碎碎念和吃喝都从这一遍里取；图鉴同时并行计算。
-  - 算好的结果留在 ViewModel 里，再切回探索时立刻显示上次的结果。只有日记、照片、碎碎念标签变了，或者换了一天，才会重算。
-  - 构建期间又来的刷新请求会合并成一次。
-  - 我的菜单打开时，先显示探索已经算好的吃喝列表。
-- 返回键由 ExploreScreen 自己处理（先回今日），AppNavigation 只负责把它当成一层盖在上面。全屏子页面（心情、我的菜单、那一天）共用 `TodayPages.kt` 里的 `FullScreenPage`；三张一排的照片共用 `PhotoStrip`。今日页加载完 3 秒后会先算一次，所以第一次打开探索通常已经准备好了。万一还没好，先显示页面的灰色轮廓，数据到了再整体淡入。翻到第几页在第一帧就读出来，卡片不会从第 1 页跳过去。
+- 界面：`ui/today/ExploreUi.kt`。我的菜单打开时，先显示探索已经算好的吃喝列表。返回键由 ExploreScreen 自己处理（先回到今日）。全屏子页面（心情、我的菜单、那一天）共用 `TodayPages.kt` 里的 `FullScreenPage`，三张一排的照片共用 `PhotoStrip`。
 
 ### 20.3 以后再考虑
 

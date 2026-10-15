@@ -33,6 +33,9 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
@@ -43,7 +46,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -70,6 +72,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.openminis.app.R
 import com.openminis.app.data.photos.CameraPhoto
+import kotlinx.coroutines.awaitCancellation
 import java.time.Instant
 import java.time.ZoneId
 import java.util.Locale
@@ -94,10 +97,15 @@ private sealed interface Sheet {
 fun ExploreScreen(
     onAskMinis: (text: String, photoUris: List<String>) -> Unit,
     modifier: Modifier = Modifier,
-    vm: TodayViewModel = viewModel(),
+    // Today's: the nature collection and 我的菜单 open on it, and 探索 reads from it.
+    today: TodayViewModel = viewModel(),
+    vm: ExploreViewModel = viewModel(factory = viewModelFactory { initializer { ExploreViewModel(today.getApplication(), today) } }),
 ) {
     val zone = ZoneId.systemDefault()
-    val data by vm.explore.collectAsState()
+    val data by vm.data.collectAsState()
+    val page by vm.page.collectAsState()
+    // Saved with the tab (AppNavigation keeps each tab's saved state), so coming back finds the same place.
+    val listState = rememberLazyListState()
     var sheet by remember { mutableStateOf<Sheet?>(null) }
     var viewer by remember { mutableStateOf<Pair<List<CameraPhoto>, Int>?>(null) }
 
@@ -105,11 +113,13 @@ fun ExploreScreen(
     // Composed after the NavHost and AppNavigation's own, so it is asked first.
     BackHandler { MainTabs.select(MainTabs.Tab.TODAY) }
 
-    // Brought up to date on every return (a note written on Today, a new day);
-    // what was there stays on screen meanwhile, and is swapped only if it changed.
+    // Built only while on screen: resumed and this tab showing (leaving the tab disposes this).
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     LaunchedEffect(lifecycle) {
-        lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) { vm.refreshExplore() }
+        lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            vm.setVisible(true)
+            try { awaitCancellation() } finally { vm.setVisible(false) }
+        }
     }
 
     Surface(modifier = modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -130,7 +140,9 @@ fun ExploreScreen(
                 if (d == null) Placeholder()
                 else ExploreContent(
                     d = d,
-                    vm = vm,
+                    page = page,
+                    onPage = vm::turnTo,
+                    listState = listState,
                     zone = zone,
                     onSheet = { sheet = it },
                     onPhoto = { list, i -> viewer = list to i },
@@ -141,12 +153,12 @@ fun ExploreScreen(
 
     when (val sh = sheet) {
         is Sheet.Nature -> NatureCollectionPage(
-            vm = vm,
+            vm = today,
             open = sh.latin,
             onAsk = { text, uris -> sheet = null; onAskMinis(text, uris) },
             onDismiss = { sheet = null },
         )
-        is Sheet.Dishes -> DishesPage(vm, focus = sh.focus, onDismiss = { sheet = null })
+        is Sheet.Dishes -> DishesPage(today, focus = sh.focus, initial = data?.food, onDismiss = { sheet = null })
         is Sheet.Day -> DayPage(vm, sh.page, zone, onPhoto = { list, i -> viewer = list to i }, onDismiss = { sheet = null })
         null -> Unit
     }
@@ -157,21 +169,21 @@ fun ExploreScreen(
 @Composable
 private fun ExploreContent(
     d: ExploreData,
-    vm: TodayViewModel,
+    page: Int,
+    onPage: (Int) -> Unit,
+    listState: LazyListState,
     zone: ZoneId,
     onSheet: (Sheet) -> Unit,
     onPhoto: (List<CameraPhoto>, Int) -> Unit,
 ) {
-    // Read where the day's turning stopped right away, so the card never jumps from the first page to it.
-    var page by remember(d.today) { mutableIntStateOf(vm.explorePage(d.today)) }
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 28.dp)) {
+    LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 28.dp)) {
         item(key = "page") {
             PageCard(
                 pages = d.pages,
                 index = page.coerceIn(0, (d.pages.size - 1).coerceAtLeast(0)),
                 photos = d.photos,
                 zone = zone,
-                onIndex = { page = it; vm.setExplorePage(d.today, it) },
+                onIndex = onPage,
                 onPhoto = onPhoto,
                 onOpenDay = { onSheet(Sheet.Day(it)) },
             )
@@ -466,9 +478,9 @@ private fun bigNumber(n: Int): String {
  * own note is marked.
  */
 @Composable
-private fun DayPage(vm: TodayViewModel, page: ExplorePage, zone: ZoneId, onPhoto: (List<CameraPhoto>, Int) -> Unit, onDismiss: () -> Unit) {
+private fun DayPage(vm: ExploreViewModel, page: ExplorePage, zone: ZoneId, onPhoto: (List<CameraPhoto>, Int) -> Unit, onDismiss: () -> Unit) {
     var loaded by remember { mutableStateOf<Pair<List<ExploreNote>, Map<String, CameraPhoto>>?>(null) }
-    LaunchedEffect(page.note.date) { loaded = vm.exploreDay(page.note.date) }
+    LaunchedEffect(page.note.date) { loaded = vm.day(page.note.date) }
     FullScreenPage(
         onDismiss,
         header = {

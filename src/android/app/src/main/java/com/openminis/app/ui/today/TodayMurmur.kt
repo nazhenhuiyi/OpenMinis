@@ -71,6 +71,8 @@ internal class TodayMurmur(
     private var retryJob: Job? = null
     /** Asked the cloud this session (ok or not): never twice for the same text. */
     private val asked = HashSet<String>()
+    /** Texts the model could not tag this session: not tried again on every reload (each try loads the model). */
+    private val failed = HashSet<String>()
 
     val ready: Boolean get() = MurmurLlm.isReady(context)
     var moodColors: Boolean
@@ -111,7 +113,9 @@ internal class TodayMurmur(
             // Just written or edited: wait — it is often changed again right away (§19.1).
             val touched = (n.entry.edited ?: n.entry.at)?.toInstant()?.toEpochMilli() ?: 0L
             if (now - touched < SETTLE_MS) { settling = true; continue }
-            val t = MurmurLlm.tag(context, n.entry.body) ?: continue
+            val key = id + MurmurIndex.hash(n.entry.body)
+            if (key in failed) continue
+            val t = MurmurLlm.tag(context, n.entry.body) ?: run { failed += key; null } ?: continue
             withContext(Dispatchers.IO) { index.putTags(id, n.entry.body, t) }
             publishFor(days)
         }

@@ -186,7 +186,7 @@ data class CollectedSpecies(
  * notes, the photo library for the photos — groups are never stored (§3).
  */
 @OptIn(FlowPreview::class)
-class TodayViewModel(app: Application) : AndroidViewModel(app) {
+class TodayViewModel(app: Application) : AndroidViewModel(app), ExploreSources {
     private val context: Context get() = getApplication()
     private val store = JournalStore.get(app)
     private val roll = CameraRollSource(app)
@@ -210,11 +210,7 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
     // ── 碎碎念 model (SPEC §19) ──
     private val murmur = TodayMurmur(
         app, viewModelScope, store,
-        publish = { mood, words, sugg ->
-            _state.update { it.copy(dayMood = mood, noteMood = words, murmurSuggestions = sugg) }
-            // New tags can mean new dishes on 探索.
-            exploreStale = true
-        },
+        publish = { mood, words, sugg -> _state.update { it.copy(dayMood = mood, noteMood = words, murmurSuggestions = sugg) } },
         reload = ::reload,
     ).also { m -> _state.update { it.copy(moodColors = m.moodColors, smartSuggest = m.smartSuggest) } }
 
@@ -239,96 +235,15 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
     }
     fun dismissMurmurSuggestion(note: TodayNote): (() -> Unit)? = murmur.dismiss(note)?.let { prev -> { murmur.restore(note, prev) } }
     fun setReminderTime(note: TodayNote, atMs: Long) { murmur.setReminderTime(note, atMs) }
-    suspend fun foodNotes(): List<FoodNote> = murmur.foodNotes()
-    suspend fun tagDishBacklog(onProgress: (Int, Int) -> Unit) {
-        murmur.tagBacklog(onProgress)
-        exploreStale = true
-    }
+    override suspend fun foodNotes(days: List<Pair<LocalDate, List<com.openminis.app.data.journal.JournalEntry>>>?): List<FoodNote> =
+        murmur.foodNotes(days)
+
+    // ── For 探索 (SPEC §20), which reads the collection and the food murmurs from here ──
+    override val tagChanges: StateFlow<Int> = com.openminis.app.data.murmur.MurmurIndex.get(app).tagChanges
+    override val murmurReady: Boolean get() = _state.value.murmurReady
+
+    suspend fun tagDishBacklog(onProgress: (Int, Int) -> Unit) = murmur.tagBacklog(onProgress)
     suspend fun photosFor(paths: Collection<String>): Map<String, com.openminis.app.data.photos.CameraPhoto> = roll.findByRelativePaths(paths)
-
-    // ── 探索 (SPEC §20) ──
-    // Built whole, off the main thread, and kept: the tab shows the last one at
-    // once on every return, and it is built again only when the journal, the
-    // photos, the murmur tags or the day have changed since.
-    private val _explore = MutableStateFlow<ExploreData?>(null)
-    val explore: StateFlow<ExploreData?> = _explore.asStateFlow()
-    private val exploreRequests = MutableStateFlow(0)
-    /** What the last build saw: (journal changes, photo changes, day). */
-    private var exploreBuiltFrom: Triple<Long, Int, LocalDate>? = null
-    @Volatile private var rollVersion = 0
-    @Volatile private var exploreStale = false
-
-    /** Asks while a build runs fold into one more build after it. */
-    fun refreshExplore() { exploreRequests.value++ }
-
-    private suspend fun runExploreBuilds() {
-        exploreRequests.drop(1).collect {
-            val from = Triple(store.changes.value, rollVersion, LocalDate.now())
-            if (from == exploreBuiltFrom && !exploreStale && _explore.value != null) return@collect
-            exploreStale = false
-            runCatching { buildExplore(from.third) }
-                .onSuccess { _explore.value = it; exploreBuiltFrom = from }
-                .onFailure { AppLogger.warning(TAG, "explore: ${it.message}") }
-        }
-    }
-
-    private suspend fun buildExplore(today: LocalDate): ExploreData = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-        // One read of the journal for the notes and the food; the collection keeps its own per-day index.
-        val days = store.availableDays().sorted().map { it to store.readDay(it)?.entries.orEmpty() }
-        val speciesJob = async { runCatching { collection() }.getOrDefault(lastCollection.orEmpty()) }
-        val food = runCatching { murmur.foodNotes(days) }.getOrDefault(emptyList())
-        val notes = days.flatMap { (date, entries) -> exploreNotesOf(date, entries) }
-        val species = speciesJob.await()
-        val pages = Explore.pages(notes, today)
-        val firsts = Explore.firsts(species, food)
-        val foodCover = food.firstOrNull { it.photos.isNotEmpty() }?.photos?.first()
-        // Species photos are already looked up by the collection; the rest are looked up here.
-        val kindPhotos = species.flatMap { it.first.photos }.associateBy { it.relativePath }
-        val photos = roll.findByRelativePaths(
-            pages.flatMap { it.note.photos.take(3) } + listOfNotNull(foodCover) + firsts.filter { !it.species }.mapNotNull { it.photo },
-        ) + firsts.filter { it.species }.mapNotNull { f -> f.photo?.let { p -> kindPhotos[p]?.let { p to it } } }
-        ExploreData(
-            today = today,
-            pages = pages,
-            facts = Explore.facts(notes, zone),
-            firsts = firsts,
-            speciesCount = species.size,
-            natureCover = species.firstOrNull()?.photos?.firstOrNull(),
-            showFood = _state.value.murmurReady || food.isNotEmpty(),
-            food = food,
-            foodCover = foodCover?.let(photos::get),
-            photos = photos,
-        )
-    }
-
-    /** One day's notes for 探索's "that day" page, oldest first, with their photos. */
-    suspend fun exploreDay(date: LocalDate): Pair<List<ExploreNote>, Map<String, com.openminis.app.data.photos.CameraPhoto>> =
-        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            val notes = exploreNotesOf(date, store.readDay(date)?.entries.orEmpty())
-            notes to roll.findByRelativePaths(notes.flatMap { it.photos })
-        }
-
-    /** A day's notes as 探索 sees them: no check-ins, nothing empty, oldest first. */
-    private fun exploreNotesOf(date: LocalDate, entries: List<com.openminis.app.data.journal.JournalEntry>): List<ExploreNote> =
-        entries
-            .filter { it.id != null && !CheckIns.isCheckIn(it) && (it.body.isNotBlank() || it.photos.isNotEmpty()) }
-            .map { e ->
-                ExploreNote(
-                    e.id!!, date, e.at?.toInstant()?.toEpochMilli() ?: date.atStartOfDay(zone).toInstant().toEpochMilli(),
-                    e.body, e.photos, e.place,
-                )
-            }
-            .sortedBy { it.atMs }
-
-    private val explorePrefs = app.getSharedPreferences("today_explore", Context.MODE_PRIVATE)
-
-    /** Which of today's pages is showing: turning one is kept, so the day's few pages stay few. */
-    fun explorePage(today: LocalDate): Int =
-        if (explorePrefs.getString("day", null) == today.toString()) explorePrefs.getInt("page", 0) else 0
-
-    fun setExplorePage(today: LocalDate, page: Int) {
-        explorePrefs.edit().putString("day", today.toString()).putInt("page", page).apply()
-    }
 
     fun moodHintDue(): Boolean = !murmur.moodHintShown
     fun moodHintSeen() { murmur.moodHintShown = true }
@@ -376,11 +291,8 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
                 .collect { load() }
         }
         // A photo deleted or moved: look the collection's photos up again.
-        viewModelScope.launch { roll.changes().collect { sightingPhotos.clear(); sightingPhotosGone.clear(); rollVersion++ } }
+        viewModelScope.launch { roll.changes().collect { sightingPhotos.clear(); sightingPhotosGone.clear() } }
         load()
-        // Ready before the first visit to 探索 (§20), once Today itself has settled.
-        viewModelScope.launch { runExploreBuilds() }
-        viewModelScope.launch { kotlinx.coroutines.delay(EXPLORE_WARM_MS); refreshExplore() }
     }
 
     fun reload() { reloadRequests.value++ }
@@ -871,11 +783,11 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
 
     /** The collection as last built, to show at once while it is brought up to date. */
     @Volatile
-    var lastCollection: List<CollectedSpecies>? = null
+    override var lastCollection: List<CollectedSpecies>? = null
         private set
 
     /** Everything recorded, across all days, most recently seen first (§17.4). */
-    suspend fun collection(): List<CollectedSpecies> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+    override suspend fun collection(): List<CollectedSpecies> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         val (all, photos) = timedSightings()
         val names = SpeciesId.names(context, all.map { it.latin }.toSet())
         all.groupBy { it.latin }.values
@@ -1401,7 +1313,6 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
         private const val OLDER_STEP_DAYS = 7
         private const val MAX_WINDOW_DAYS = 90
         private const val RELOAD_DEBOUNCE_MS = 500L
-        private const val EXPLORE_WARM_MS = 3_000L
         private const val MAX_EXIF_READS = 5
         private const val SPECIES_PREFS = "today_species"
         private const val KEY_SPECIES_MIGRATED = "speciesNotesMigrated"

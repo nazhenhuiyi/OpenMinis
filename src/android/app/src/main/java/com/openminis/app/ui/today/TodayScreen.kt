@@ -340,7 +340,13 @@ fun TodayScreen(
     LaunchedEffect(nearTop, state.hasOlder) { if (nearTop && state.loaded) vm.loadOlder() }
     // A newly sent note scrolls into view.
     val newestKey = state.days.lastOrNull()?.rows?.lastOrNull()?.key
-    LaunchedEffect(newestKey) { if (newestKey != null) listState.animateScrollToItem(0) }
+    // Saved with the tab: coming back from another tab keeps the place, unless something new was written meanwhile.
+    var seenNewest by rememberSaveable { mutableStateOf<String?>(null) }
+    LaunchedEffect(newestKey) {
+        if (newestKey == null || newestKey == seenNewest) return@LaunchedEffect
+        if (seenNewest != null) listState.animateScrollToItem(0)
+        seenNewest = newestKey
+    }
 
     Surface(modifier = modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
       Box(Modifier.fillMaxSize()) {

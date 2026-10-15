@@ -542,10 +542,16 @@ object SpeciesId {
         Profile(me, me.lookalikes.mapNotNull { t.list.getOrNull(it) })
     }
 
-    /** Load the encoder ahead of time, so the one-off NPU compile happens before anyone waits on it. */
+    /**
+     * Load the encoder ahead of time, so the one-off NPU compile happens
+     * before anyone waits on it. Once compiled there is nothing to gain: the
+     * cache loads in a fraction of a second when a photo needs it, so the NPU
+     * and its memory are not taken on every visit to Today.
+     */
     fun warmUp(context: Context) {
         if (!isReady(context)) return
         val app = context.applicationContext
+        if (backend(app) == Backend.NPU && compiledContext(app).isFile) return
         scope.launch {
             runCatching {
                 // Only the NPU is worth loading ahead (its compile); on the CPU the ~0.5 GB session waits for a photo.
@@ -570,6 +576,12 @@ object SpeciesId {
 
     private fun npuCacheRoot(context: Context) = File(context.noBackupFilesDir, "species-npu")
 
+    /** Where the compiled encoder lives — tied to this model file: a new model gets a fresh compile. */
+    private fun compiledContext(context: Context): File {
+        val model = File(dir(context)!!, NPU_MODEL)
+        return File(File(npuCacheRoot(context), "${model.length()}-${model.lastModified()}"), "ctx.onnx")
+    }
+
     private fun clearCompiled(context: Context) = npuCacheRoot(context).deleteRecursively()
 
     /**
@@ -587,10 +599,9 @@ object SpeciesId {
         // The DSP side loads its half of QNN from ADSP_LIBRARY_PATH, so the app's own copy must be on it.
         val libDir = context.applicationInfo.nativeLibraryDir
         android.system.Os.setenv("ADSP_LIBRARY_PATH", "$libDir;/odm/lib/rfsa/adsp;/vendor/lib/rfsa/adsp;/system/lib/rfsa/adsp;/vendor/dsp/cdsp;/dsp", true)
-        // Tied to this model file: a new model gets a fresh compile.
         val model = File(d, NPU_MODEL)
-        val cacheDir = File(npuCacheRoot(context), "${model.length()}-${model.lastModified()}")
-        val ctx = File(cacheDir, "ctx.onnx")
+        val ctx = compiledContext(context)
+        val cacheDir = ctx.parentFile!!
         if (ctx.isFile) {
             try {
                 return env.createSession(ctx.path, npuOptions(compileTo = null))

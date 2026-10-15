@@ -535,6 +535,7 @@ fun AppNavigation(
     val currentRoute = currentEntry?.destination?.route
     // Today and Explore (§20) are both overlays; only chat is the NavHost.
     val overlayTab = currentTab != com.openminis.app.ui.today.MainTabs.Tab.CHAT
+    val tabStates = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
     val chatAtRoot = (currentRoute == Routes.SESSION_LIST || currentRoute == Routes.CHAT) && chatListVisible
     // The bar stays in the layout while the keyboard is up (the keyboard simply
     // covers it). Hiding it on IME used to make the composer drop to the very
@@ -1642,11 +1643,15 @@ fun AppNavigation(
         }
     }
     } // semantics box
+    // Only the showing tab is composed; each keeps its saved state (scroll
+    // position and the like) for when it shows again.
     when (currentTab) {
-        com.openminis.app.ui.today.MainTabs.Tab.TODAY ->
+        com.openminis.app.ui.today.MainTabs.Tab.TODAY -> tabStates.SaveableStateProvider("today") {
             com.openminis.app.ui.today.TodayScreen(onAskMinis = askMinis, modifier = Modifier.fillMaxSize())
-        com.openminis.app.ui.today.MainTabs.Tab.EXPLORE ->
+        }
+        com.openminis.app.ui.today.MainTabs.Tab.EXPLORE -> tabStates.SaveableStateProvider("explore") {
             com.openminis.app.ui.today.ExploreScreen(onAskMinis = askMinis, modifier = Modifier.fillMaxSize())
+        }
         com.openminis.app.ui.today.MainTabs.Tab.CHAT -> Unit
     }
     } // content box

@@ -66,9 +66,9 @@ fun List<FoodNote>.dishCounts(): Pair<Int, Int> =
  * Murmurs never tagged are read while the page is open, so the feed fills in.
  */
 @Composable
-internal fun DishesPage(vm: TodayViewModel, focus: DishFocus? = null, onDismiss: () -> Unit) {
-    // What 探索 last built shows at once; the page brings it up to date.
-    var notes by remember { mutableStateOf(vm.explore.value?.food) }
+internal fun DishesPage(vm: TodayViewModel, focus: DishFocus? = null, initial: List<FoodNote>? = null, onDismiss: () -> Unit) {
+    // [initial] (what 探索 last built) shows at once; the page brings it up to date.
+    var notes by remember { mutableStateOf(initial) }
     var photos by remember { mutableStateOf<Map<String, CameraPhoto>>(emptyMap()) }
     val gone = remember { HashSet<String>() }
     var homemadeOnly by remember { mutableStateOf(false) }
