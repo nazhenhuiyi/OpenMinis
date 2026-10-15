@@ -66,7 +66,7 @@ class HabitsTest {
         assertTrue(text.startsWith("---\ntype: habits\n---\n\n- 俯卧撑 <!-- minis:habit id=${h.id} target=20 unit=\"个\" days=mon -->\n"))
         assertTrue("unit dropped without a target", text.contains("- 冥想 <!-- minis:habit id="))
         assertFalse(text.contains("分钟"))
-        assertTrue(s.updateHabit(h.id!!) { it.withAttrs(mapOf(Habit.KEY_ARCHIVED to "2026-10-12")) })
+        assertTrue(s.updateHabit(h.id!!) { it.withAttrs(mapOf(Habit.KEY_ARCHIVED to "2026-10-12")) } != null)
         assertTrue(s.readHabits().first().archived)
         assertTrue("habits.md is not a day", s.availableDays().isEmpty())
     }

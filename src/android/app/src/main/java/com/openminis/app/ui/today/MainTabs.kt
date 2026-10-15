@@ -44,9 +44,10 @@ import java.io.File
 import java.util.UUID
 
 /**
- * [T-today-tab] The two top-level tabs (docs/design/today/SPEC.md §1).
+ * [T-today-tab] The top-level tabs (docs/design/today/SPEC.md §1): 今日,
+ * chat, and 探索 (§20).
  *
- * Today is drawn as an overlay ABOVE the existing NavHost rather than as one
+ * Today and Explore are drawn as an overlay ABOVE the existing NavHost rather than as one
  * more destination in it: every launch path (deep links, share hand-off,
  * notifications, launch-session modes, crash breakers) is written against
  * SESSION_LIST being the bottom of the back stack, and keeping that intact
@@ -55,7 +56,7 @@ import java.util.UUID
  * they always did.
  */
 object MainTabs {
-    enum class Tab { TODAY, CHAT }
+    enum class Tab { TODAY, CHAT, EXPLORE }
 
     private val _tab = MutableStateFlow(Tab.TODAY)
     val tab: StateFlow<Tab> = _tab.asStateFlow()
@@ -69,6 +70,17 @@ object MainTabs {
 
     fun select(t: Tab) { _tab.value = t }
 
+    /** [T-today-habit-reminder] `minis://today/habits` (the reminder's tap): Today opens its check-in page once loaded. */
+    private val _openHabitsRequest = MutableStateFlow(false)
+    val openHabitsRequest: StateFlow<Boolean> = _openHabitsRequest.asStateFlow()
+
+    fun openHabits() {
+        select(Tab.TODAY)
+        _openHabitsRequest.value = true
+    }
+
+    fun consumeOpenHabits() { _openHabitsRequest.value = false }
+
     /** Height of [MainTabBar] above the gesture area; content consumes it as an inset. */
     val BAR_HEIGHT = 56.dp
 }
@@ -80,6 +92,7 @@ fun MainTabBar(selected: MainTabs.Tab, onSelect: (MainTabs.Tab) -> Unit) {
         Row(Modifier.fillMaxWidth().navigationBarsPadding().height(MainTabs.BAR_HEIGHT).selectableGroup()) {
             TabLabel(stringResource(R.string.tab_today), selected == MainTabs.Tab.TODAY) { onSelect(MainTabs.Tab.TODAY) }
             TabLabel(stringResource(R.string.tab_chat), selected == MainTabs.Tab.CHAT) { onSelect(MainTabs.Tab.CHAT) }
+            TabLabel(stringResource(R.string.tab_explore), selected == MainTabs.Tab.EXPLORE) { onSelect(MainTabs.Tab.EXPLORE) }
         }
     }
 }

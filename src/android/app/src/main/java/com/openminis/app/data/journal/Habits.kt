@@ -151,6 +151,16 @@ object CheckIns {
     fun body(habit: Habit, done: Int): String =
         (if (done >= habit.goal) "✅ " else "") + listOfNotNull(habit.name, habit.progressText(done)).joinToString(" ")
 
+    /**
+     * What is still open on [date]: habits due that day and not yet at their
+     * goal, in habits.md order. The one rule behind the evening reminder (§14.6)
+     * and the weather alert's outdoor hint (§16).
+     */
+    fun open(habits: List<Habit>, totals: Map<String, Int>, date: LocalDate): List<HabitProgress> =
+        habits.filter { it.id != null && it.dueOn(date) }
+            .map { HabitProgress(it, totals[it.id] ?: 0) }
+            .filterNot { it.complete }
+
     /** Totals per habit id for one day's entries. */
     fun totals(entries: List<JournalEntry>): Map<String, Int> =
         entries.filter(::isCheckIn).groupBy { habitId(it)!! }.mapValues { (_, es) -> es.sumOf(::done) }

@@ -66,6 +66,8 @@ android {
             cmake {
                 cppFlags += "-std=c++17"
                 arguments += "-DANDROID_STL=c++_shared"
+                // [T-today-murmur] Build llama.cpp from a local checkout instead of fetching it: -PllamaSrc=/path
+                providers.gradleProperty("llamaSrc").orNull?.let { arguments += "-DFETCHCONTENT_SOURCE_DIR_LLAMA=$it" }
             }
         }
     }

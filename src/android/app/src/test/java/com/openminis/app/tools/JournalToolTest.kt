@@ -248,4 +248,65 @@ class JournalToolHabitsTest {
         val id = s.readDay(today)!!.entries.single().id!!
         assertFalse(call(s, "action" to "edit", "id" to id, "content" to "x").success)
     }
+
+    @Test
+    fun agentAddsCheckInItems() = runBlocking {
+        val s = store()
+        val r = call(s, "action" to "add_habit", "name" to "弹力带划船", "target" to 4, "unit" to "组", "days" to "mon,wed,fri")
+        assertTrue(r.output, r.success)
+        val h = s.readHabits().single()
+        assertEquals("弹力带划船", h.name)
+        assertEquals(4, h.target)
+        assertEquals("组", h.unit)
+        assertEquals(setOf(java.time.DayOfWeek.MONDAY, java.time.DayOfWeek.WEDNESDAY, java.time.DayOfWeek.FRIDAY), h.days)
+        // A retry does not make a second one.
+        assertTrue(call(s, "action" to "add_habit", "name" to "弹力带划船").output.startsWith("Not added"))
+        assertEquals(1, s.readHabits().size)
+        call(s, "action" to "add_habit", "name" to "冥想")
+        assertEquals(null, s.readHabits().last().target)
+        assertFalse(call(s, "action" to "add_habit", "name" to "x", "days" to "monday").success)
+        assertFalse(call(s, "action" to "add_habit", "name" to " ").success)
+    }
+
+    @Test
+    fun agentEditsOnlyWhatItIsGiven() = runBlocking {
+        val s = store()
+        val h = s.addHabit("俄罗斯转体", 5, "组", null)
+        call(s, "action" to "check_in", "habit" to h.id!!, "count" to 2)
+        val r = call(s, "action" to "edit_habit", "habit" to "俄罗斯转体", "target" to 3)
+        assertTrue(r.output, r.success)
+        var got = s.readHabits().single()
+        assertEquals(h.id, got.id)
+        assertEquals(3, got.target)
+        assertEquals("组", got.unit)
+        assertEquals(null, got.days)
+        assertEquals("2", s.readDay(today)!!.entries.single().attrs["done"])
+        call(s, "action" to "edit_habit", "habit" to h.id!!, "name" to "转体", "days" to "tue,thu")
+        got = s.readHabits().single()
+        assertEquals("转体", got.name)
+        assertEquals(setOf(java.time.DayOfWeek.TUESDAY, java.time.DayOfWeek.THURSDAY), got.days)
+        call(s, "action" to "edit_habit", "habit" to "转体", "target" to 0, "days" to "daily")
+        got = s.readHabits().single()
+        assertEquals(null, got.target)
+        assertEquals(null, got.unit)
+        assertEquals(null, got.days)
+        assertFalse(call(s, "action" to "edit_habit", "habit" to "转体").success)
+        s.addHabit("卷腹", 4, "组", null)
+        assertFalse(call(s, "action" to "edit_habit", "habit" to "转体", "name" to "卷腹").success)
+    }
+
+    @Test
+    fun agentRemovesByArchiving() = runBlocking {
+        val s = store()
+        s.addHabit("蛋白粉", 1, "杯", null)
+        call(s, "action" to "check_in", "habit" to "蛋白粉")
+        assertTrue(call(s, "action" to "remove_habit", "habit" to "蛋白粉").success)
+        val got = s.readHabits().single()
+        assertTrue(got.archived)
+        assertEquals(1, s.readDay(today)!!.entries.size)
+        assertTrue(call(s, "action" to "habits").output.startsWith("The user has no check-in items"))
+        assertFalse(call(s, "action" to "remove_habit", "habit" to "蛋白粉").success)
+        // Archived names are free again.
+        assertTrue(call(s, "action" to "add_habit", "name" to "蛋白粉").output.startsWith("Added"))
+    }
 }

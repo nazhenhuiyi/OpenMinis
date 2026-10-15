@@ -5,6 +5,7 @@ import com.openminis.app.data.model.AgentToolDefinition
 import com.openminis.app.data.model.AgentToolParam
 import com.openminis.app.data.journal.CheckIns
 import com.openminis.app.data.journal.Habit
+import com.openminis.app.data.journal.HabitCodec
 import com.openminis.app.data.journal.JournalEntry
 import com.openminis.app.data.journal.JournalStore
 import com.openminis.app.data.photos.MinisCameraCapture
@@ -19,6 +20,7 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.OffsetDateTime
@@ -62,20 +64,25 @@ object JournalTool {
             "Use list first to get an entry's id before edit or delete, unless you already have it (a quoted entry carries its id). " +
             "Daily check-ins (habits such as '20 push-ups'): habits lists the user's check-in items and today's progress; " +
             "check_in records progress for TODAY only (past days cannot be checked in). " +
-            "Check-in items themselves are defined by the user in the Today tab; you cannot create or change them.",
+            "add_habit / edit_habit / remove_habit change the check-in items themselves — only when the user asks or clearly agrees to a concrete list, since it is their plan. " +
+            "remove_habit archives the item: past check-ins keep its name; the user can add it again later.",
         parameters = mapOf(
             "tool_title" to AgentToolParam("string", "A concise 5-10 word summary of what this tool call does, shown to the user (e.g. 'Read today's journal', 'Log yesterday's movie night'). Use the same language as the user."),
-            "action" to AgentToolParam("string", "What to do.", enumValues = listOf("list", "add", "edit", "delete", "habits", "check_in")),
+            "action" to AgentToolParam("string", "What to do.", enumValues = listOf("list", "add", "edit", "delete", "habits", "check_in", "add_habit", "edit_habit", "remove_habit")),
             "date" to AgentToolParam("string", "Local date YYYY-MM-DD. list: the day to read (default today). add: the day the entry belongs to (default today). edit: move the entry to this day."),
             "time" to AgentToolParam("string", "add: local time HH:mm the entry is about; omit it for something happening now (today only). Required when backfilling another day. edit: move the entry to this time."),
             "content" to AgentToolParam("string", "add: the entry text, plain Markdown, written as the user would write it. edit: the new text; omit to keep the text as it is."),
             "photos" to AgentToolParam("string", "add/edit: comma-separated image paths in the sandbox (e.g. /var/minis/attachments/uploads/photo-123.jpg) to attach. edit adds them to the entry's existing photos."),
             "id" to AgentToolParam("string", "edit/delete: the entry id from list."),
-            "habit" to AgentToolParam("string", "check_in: the habit id or exact name from habits."),
+            "habit" to AgentToolParam("string", "check_in/edit_habit/remove_habit: the habit id or exact name from habits."),
             "count" to AgentToolParam("integer", "check_in: how much to ADD to today's total (negative to correct a mistake). Omit to mark the habit fully done for today."),
+            "name" to AgentToolParam("string", "add_habit: the item's name, short, in the user's language (e.g. '弹力带划船'). edit_habit: a new name; past check-ins follow the rename."),
+            "target" to AgentToolParam("integer", "add_habit/edit_habit: daily goal, a positive number (e.g. 4 for '4 组'). Omit (add) or 0 (edit) for a plain tick-box item."),
+            "unit" to AgentToolParam("string", "add_habit/edit_habit: unit of the target, display only (e.g. '组', '个', 'km'). Ignored without a target."),
+            "days" to AgentToolParam("string", "add_habit/edit_habit: weekdays it is due, comma-separated from mon,tue,wed,thu,fri,sat,sun (e.g. 'mon,wed,fri'). Omit (add) or 'daily' (edit) for every day."),
         ),
         required = listOf("tool_title", "action"),
-        propertyOrdering = listOf("tool_title", "action", "date", "time", "content", "photos", "id", "habit", "count"),
+        propertyOrdering = listOf("tool_title", "action", "date", "time", "content", "photos", "id", "habit", "count", "name", "target", "unit", "days"),
     )
 
     suspend fun execute(context: Context, argsJson: String, sessionId: String): ToolExecutionResult {
@@ -156,7 +163,39 @@ object JournalTool {
             return out to null
         }
 
-        return when (args.optString("action").trim().lowercase()) {
+        fun given(key: String) = args.has(key) && !args.isNull(key)
+        // Habit actions throw this for a bad argument; it becomes the tool's error.
+        class BadArg(message: String) : Exception(message)
+        class Found(val habit: Habit, val id: String, val active: List<Habit>)
+        suspend fun findHabit(): Found {
+            val key = args.optString("habit").trim().ifEmpty { throw BadArg("habit is required") }
+            val active = store.readHabits().filter { !it.archived && it.id != null }
+            val habit = active.firstOrNull { it.id == key } ?: active.firstOrNull { it.name.equals(key, ignoreCase = true) }
+                ?: throw BadArg("no check-in item '$key'; use action habits to see the ids")
+            return Found(habit, habit.id!!, active)
+        }
+        /** 0 = tick-box (null). */
+        fun targetArg(): Int? {
+            val n = args.optInt("target", -1)
+            if (n < 0) throw BadArg("target must be a positive integer (0 = tick-box)")
+            return n.takeIf { it > 0 }
+        }
+        /** null = every day. */
+        fun daysArg(): Set<DayOfWeek>? {
+            val raw = args.optString("days").trim().lowercase()
+            if (raw.isEmpty() || raw in setOf("daily", "every day", "everyday", "all")) return null
+            val codes = raw.split(',').map { it.trim() }.filter { it.isNotEmpty() }
+            val bad = codes.filter { it !in Habit.DAY_CODES }
+            if (bad.isNotEmpty()) throw BadArg("days must be comma-separated mon,tue,wed,thu,fri,sat,sun (got ${bad.joinToString(",")})")
+            return codes.map { Habit.DAY_CODES.getValue(it) }.toSet()
+        }
+        fun describe(h: Habit): String = buildString {
+            append("id=").append(h.id).append(" name=").append(h.name)
+            h.goalText?.let { append(" target=").append(it) }
+            append(" days=").append(h.days?.let { Habit.daysAttr(it) } ?: "daily")
+        }
+
+        return try { when (args.optString("action").trim().lowercase()) {
             "list" -> {
                 val day = date() ?: return fail("date must be YYYY-MM-DD")
                 val doc = store.readDay(day)
@@ -245,7 +284,7 @@ object JournalTool {
                 val today = store.now().toLocalDate()
                 val habits = store.readHabits().filter { !it.archived }
                 if (habits.isEmpty()) {
-                    return ToolExecutionResult("The user has no check-in items. They can add them in the Today tab (⋯ → Daily check-ins).", true, toolTitle = title)
+                    return ToolExecutionResult("The user has no check-in items. They can add them in the Today tab (⋯ → Daily check-ins), or you can with add_habit when they ask.", true, toolTitle = title)
                 }
                 val totals = CheckIns.totals(store.readDay(today)?.entries.orEmpty())
                 val out = buildString {
@@ -263,26 +302,58 @@ object JournalTool {
                 ToolExecutionResult(out, true, toolTitle = title)
             }
             "check_in" -> {
-                val key = args.optString("habit").trim().ifEmpty { return fail("habit is required for check_in") }
                 if (args.optString("date").isNotBlank() && date() != store.now().toLocalDate()) {
                     return fail("check-ins can only be recorded for today; past days cannot be filled in")
                 }
-                val habits = store.readHabits().filter { !it.archived }
-                val habit = habits.firstOrNull { it.id == key } ?: habits.firstOrNull { it.name.equals(key, ignoreCase = true) }
-                    ?: return fail("no check-in item '$key'; use action habits to see the ids")
+                val habit = findHabit().habit
                 val today = store.now().toLocalDate()
-                val before = CheckIns.totals(store.readDay(today)?.entries.orEmpty())[habit.id] ?: 0
-                val after = if (args.has("count") && !args.isNull("count")) {
+                val after = if (given("count")) {
                     val n = args.optInt("count", Int.MIN_VALUE)
                     if (n == Int.MIN_VALUE) return fail("count must be an integer")
-                    if (habit.target == null && n > 0) 1 else (before + n).coerceAtLeast(0)
+                    val before = store.todayTotals()[habit.id] ?: 0
+                    (if (habit.target == null && n > 0) 1 else (before + n).coerceAtLeast(0))
+                        .also { store.setCheckIn(today, habit, it, by = JournalEntry.BY_MINIS) }
                 } else {
-                    maxOf(before, habit.goal)
+                    store.completeCheckIn(habit, by = JournalEntry.BY_MINIS)
                 }
-                store.setCheckIn(today, habit, after, by = JournalEntry.BY_MINIS)
                 ToolExecutionResult("Checked in ${habit.name} for $today: ${progress(habit, after)}.", true, toolTitle = title)
             }
-            else -> fail("action must be one of list, add, edit, delete, habits, check_in")
+            "add_habit" -> {
+                val name = HabitCodec.cleanName(args.optString("name")).ifEmpty { return fail("name is required for add_habit") }
+                val target = if (given("target")) targetArg() else null
+                val days = if (given("days")) daysArg() else null
+                // A retried call, or one item named twice, must not make two of the same.
+                store.readHabits().firstOrNull { !it.archived && it.name.equals(name, ignoreCase = true) }?.let {
+                    return ToolExecutionResult("Not added: check-in item ${describe(it)} already exists. Use edit_habit to change it.", true, toolTitle = title)
+                }
+                val unit = if (given("unit")) args.optString("unit").trim().ifEmpty { null } else null
+                val h = store.addHabit(name, target, unit, days)
+                ToolExecutionResult("Added check-in item ${describe(h)}.", true, toolTitle = title)
+            }
+            "edit_habit" -> {
+                val (habit, id, active) = findHabit().let { Triple(it.habit, it.id, it.active) }
+                val name = if (given("name")) HabitCodec.cleanName(args.optString("name")).ifEmpty { null } else null
+                if (name == null && !given("target") && !given("days") && !given("unit")) {
+                    return fail("edit_habit needs at least one of name, target, unit, days")
+                }
+                if (name != null && active.any { it.id != id && it.name.equals(name, ignoreCase = true) }) {
+                    return fail("another check-in item is already named '$name'")
+                }
+                val target = if (given("target")) targetArg() else habit.target
+                val days = if (given("days")) daysArg() else habit.days
+                val unit = if (given("unit")) args.optString("unit").trim() else habit.unit
+                val updated = store.updateHabit(id) { h -> h.withDefinition(name ?: h.name, target, unit, days) }
+                    ?: return fail("check-in item id=$id could not be changed (its id may appear twice in habits.md)")
+                ToolExecutionResult("Changed check-in item: ${describe(updated)}. Past check-ins keep their counts.", true, toolTitle = title)
+            }
+            "remove_habit" -> {
+                val (habit, id) = findHabit().let { it.habit to it.id }
+                store.archiveHabit(id) ?: return fail("check-in item id=$id could not be removed")
+                ToolExecutionResult("Removed check-in item ${habit.name} (id=$id). Past check-ins still show it.", true, toolTitle = title)
+            }
+            else -> fail("action must be one of list, add, edit, delete, habits, check_in, add_habit, edit_habit, remove_habit")
+        } } catch (e: BadArg) {
+            fail(e.message!!)
         }
     }
 }

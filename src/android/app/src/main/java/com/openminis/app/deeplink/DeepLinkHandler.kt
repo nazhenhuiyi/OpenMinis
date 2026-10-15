@@ -47,6 +47,8 @@ import com.openminis.app.ui.navigation.Routes
 sealed class DeepLinkAction {
     data object OpenShare : DeepLinkAction()
     data object OpenAlarmList : DeepLinkAction()
+    /** [T-today-habit-reminder] `minis://today/habits` — Today's check-in page (the evening reminder's tap). */
+    data object OpenTodayHabits : DeepLinkAction()
     data class OpenTerminal(val initCommand: String?) : DeepLinkAction()
     data class CreateEnvironmentVariable(val key: String, val value: String, val note: String) : DeepLinkAction()
     data object OpenPermissionSettings : DeepLinkAction()
@@ -108,6 +110,7 @@ object DeepLinkHandler {
                 "/alarm" -> DeepLinkAction.OpenAlarmList
                 else -> DeepLinkAction.Unknown
             }
+            "today" -> if (path == "/habits") DeepLinkAction.OpenTodayHabits else DeepLinkAction.Unknown
             "open_terminal" -> DeepLinkAction.OpenTerminal(
                 initCommand = uri.getQueryParameter("init_command")
             )

@@ -17,6 +17,7 @@ import com.openminis.app.data.journal.JournalStore
 import com.openminis.app.data.journal.DayWeather
 import com.openminis.app.data.journal.TodayLocation
 import com.openminis.app.data.journal.TodayWeather
+import com.openminis.app.notification.HabitReminder
 import com.openminis.app.notification.WeatherAlerts
 import com.openminis.app.data.photos.CameraPhoto
 import com.openminis.app.data.photos.CameraRollRules
@@ -116,6 +117,9 @@ data class TodayUiState(
     /** Weather alerts on (§16), and the one that applies right now, pinned under the header (§16.5). */
     val weatherAlerts: Boolean = true,
     val weatherAlert: String? = null,
+    /** Evening check-in reminder on, and its time as minutes after midnight (§14.6). */
+    val habitReminder: Boolean = true,
+    val habitReminderMinute: Int = HabitReminder.DEFAULT_MINUTE,
     /** Today's check-ins (top-bar chip + sheet): habits due today, plus any already checked in today (even if deleted since). */
     val todayHabits: List<HabitProgress> = emptyList(),
     /** Species ID files are on this phone (§17); off = no suggestions and no "identify" item. */
@@ -127,6 +131,18 @@ data class TodayUiState(
     val tags: Map<String, PhotoTag> = emptyMap(),
     /** Confident species guesses for timeline photos, by relative path (§17.2). */
     val suggestions: Map<String, SpeciesSuggestion> = emptyMap(),
+    /** The 碎碎念 model is on this phone (§19.1); off = no mood colours and no suggestions. */
+    val murmurReady: Boolean = false,
+    val moodColors: Boolean = true,
+    val smartSuggest: Boolean = false,
+    /** Some model is set up to ask (§19.3); without one the switch is greyed with a hint. */
+    val cloudAvailable: Boolean = true,
+    /** Each day's colour (§19.2); absent = no murmurs tagged that day, or colours off. */
+    val dayMood: Map<LocalDate, com.openminis.app.data.murmur.MoodTier> = emptyMap(),
+    /** Each murmur's mood word, the user's own or the model's (§19.2), by entry id. */
+    val noteMood: Map<String, String> = emptyMap(),
+    /** What shows under murmurs (§19.3), by entry id. */
+    val murmurSuggestions: Map<String, com.openminis.app.data.murmur.MurmurSuggestion> = emptyMap(),
 )
 
 /** What Today offers under a photo: "looks like [name]" (§17.2). [genus] = only the genus is claimed. */
@@ -185,9 +201,141 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
             includedAlbums = prefs.getStringSet(KEY_ALBUMS, emptySet()).orEmpty(),
             showWeather = prefs.getBoolean(KEY_SHOW_WEATHER, true),
             weatherAlerts = WeatherAlerts.isEnabled(app),
+            habitReminder = HabitReminder.isEnabled(app),
+            habitReminderMinute = HabitReminder.minuteOfDay(app),
         ),
     )
     val state: StateFlow<TodayUiState> = _state.asStateFlow()
+
+    // ── 碎碎念 model (SPEC §19) ──
+    private val murmur = TodayMurmur(
+        app, viewModelScope, store,
+        publish = { mood, words, sugg ->
+            _state.update { it.copy(dayMood = mood, noteMood = words, murmurSuggestions = sugg) }
+            // New tags can mean new dishes on 探索.
+            exploreStale = true
+        },
+        reload = ::reload,
+    ).also { m -> _state.update { it.copy(moodColors = m.moodColors, smartSuggest = m.smartSuggest) } }
+
+    fun setMoodColors(on: Boolean) {
+        murmur.moodColors = on
+        _state.update { it.copy(moodColors = on) }
+        murmur.onDays(_state.value.days)
+    }
+
+    fun setSmartSuggest(on: Boolean) {
+        murmur.smartSuggest = on
+        _state.update { it.copy(smartSuggest = on) }
+        murmur.onDays(_state.value.days)
+    }
+
+    /** Each returns an undo (null if there was nothing to change). */
+    fun acceptReminder(note: TodayNote): (() -> Unit)? {
+        val prev = murmur.acceptReminder(note) ?: return null
+        // A reminder nobody can see is no reminder: ask once if notifications are off (as §14.6 does).
+        if (!androidx.core.app.NotificationManagerCompat.from(context).areNotificationsEnabled()) events.trySend(Event.NeedNotificationPermission)
+        return { murmur.restore(note, prev) }
+    }
+    fun dismissMurmurSuggestion(note: TodayNote): (() -> Unit)? = murmur.dismiss(note)?.let { prev -> { murmur.restore(note, prev) } }
+    fun setReminderTime(note: TodayNote, atMs: Long) { murmur.setReminderTime(note, atMs) }
+    suspend fun foodNotes(): List<FoodNote> = murmur.foodNotes()
+    suspend fun tagDishBacklog(onProgress: (Int, Int) -> Unit) {
+        murmur.tagBacklog(onProgress)
+        exploreStale = true
+    }
+    suspend fun photosFor(paths: Collection<String>): Map<String, com.openminis.app.data.photos.CameraPhoto> = roll.findByRelativePaths(paths)
+
+    // ── 探索 (SPEC §20) ──
+    // Built whole, off the main thread, and kept: the tab shows the last one at
+    // once on every return, and it is built again only when the journal, the
+    // photos, the murmur tags or the day have changed since.
+    private val _explore = MutableStateFlow<ExploreData?>(null)
+    val explore: StateFlow<ExploreData?> = _explore.asStateFlow()
+    private val exploreRequests = MutableStateFlow(0)
+    /** What the last build saw: (journal changes, photo changes, day). */
+    private var exploreBuiltFrom: Triple<Long, Int, LocalDate>? = null
+    @Volatile private var rollVersion = 0
+    @Volatile private var exploreStale = false
+
+    /** Asks while a build runs fold into one more build after it. */
+    fun refreshExplore() { exploreRequests.value++ }
+
+    private suspend fun runExploreBuilds() {
+        exploreRequests.drop(1).collect {
+            val from = Triple(store.changes.value, rollVersion, LocalDate.now())
+            if (from == exploreBuiltFrom && !exploreStale && _explore.value != null) return@collect
+            exploreStale = false
+            runCatching { buildExplore(from.third) }
+                .onSuccess { _explore.value = it; exploreBuiltFrom = from }
+                .onFailure { AppLogger.warning(TAG, "explore: ${it.message}") }
+        }
+    }
+
+    private suspend fun buildExplore(today: LocalDate): ExploreData = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        // One read of the journal for the notes and the food; the collection keeps its own per-day index.
+        val days = store.availableDays().sorted().map { it to store.readDay(it)?.entries.orEmpty() }
+        val speciesJob = async { runCatching { collection() }.getOrDefault(lastCollection.orEmpty()) }
+        val food = runCatching { murmur.foodNotes(days) }.getOrDefault(emptyList())
+        val notes = days.flatMap { (date, entries) -> exploreNotesOf(date, entries) }
+        val species = speciesJob.await()
+        val pages = Explore.pages(notes, today)
+        val firsts = Explore.firsts(species, food)
+        val foodCover = food.firstOrNull { it.photos.isNotEmpty() }?.photos?.first()
+        // Species photos are already looked up by the collection; the rest are looked up here.
+        val kindPhotos = species.flatMap { it.first.photos }.associateBy { it.relativePath }
+        val photos = roll.findByRelativePaths(
+            pages.flatMap { it.note.photos.take(3) } + listOfNotNull(foodCover) + firsts.filter { !it.species }.mapNotNull { it.photo },
+        ) + firsts.filter { it.species }.mapNotNull { f -> f.photo?.let { p -> kindPhotos[p]?.let { p to it } } }
+        ExploreData(
+            today = today,
+            pages = pages,
+            facts = Explore.facts(notes, zone),
+            firsts = firsts,
+            speciesCount = species.size,
+            natureCover = species.firstOrNull()?.photos?.firstOrNull(),
+            showFood = _state.value.murmurReady || food.isNotEmpty(),
+            food = food,
+            foodCover = foodCover?.let(photos::get),
+            photos = photos,
+        )
+    }
+
+    /** One day's notes for 探索's "that day" page, oldest first, with their photos. */
+    suspend fun exploreDay(date: LocalDate): Pair<List<ExploreNote>, Map<String, com.openminis.app.data.photos.CameraPhoto>> =
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            val notes = exploreNotesOf(date, store.readDay(date)?.entries.orEmpty())
+            notes to roll.findByRelativePaths(notes.flatMap { it.photos })
+        }
+
+    /** A day's notes as 探索 sees them: no check-ins, nothing empty, oldest first. */
+    private fun exploreNotesOf(date: LocalDate, entries: List<com.openminis.app.data.journal.JournalEntry>): List<ExploreNote> =
+        entries
+            .filter { it.id != null && !CheckIns.isCheckIn(it) && (it.body.isNotBlank() || it.photos.isNotEmpty()) }
+            .map { e ->
+                ExploreNote(
+                    e.id!!, date, e.at?.toInstant()?.toEpochMilli() ?: date.atStartOfDay(zone).toInstant().toEpochMilli(),
+                    e.body, e.photos, e.place,
+                )
+            }
+            .sortedBy { it.atMs }
+
+    private val explorePrefs = app.getSharedPreferences("today_explore", Context.MODE_PRIVATE)
+
+    /** Which of today's pages is showing: turning one is kept, so the day's few pages stay few. */
+    fun explorePage(today: LocalDate): Int =
+        if (explorePrefs.getString("day", null) == today.toString()) explorePrefs.getInt("page", 0) else 0
+
+    fun setExplorePage(today: LocalDate, page: Int) {
+        explorePrefs.edit().putString("day", today.toString()).putInt("page", page).apply()
+    }
+
+    fun moodHintDue(): Boolean = !murmur.moodHintShown
+    fun moodHintSeen() { murmur.moodHintShown = true }
+    suspend fun moodMonth(ym: java.time.YearMonth): List<MoodDay> = murmur.month(ym)
+    suspend fun tagMoodBacklog(onEach: () -> Unit) = murmur.tagMonthBacklog(onEach)
+    fun setNoteMood(date: LocalDate, id: String, word: String) { viewModelScope.launch { murmur.setMood(date, id, word) } }
+    suspend fun setNoteMoodNow(date: LocalDate, id: String, word: String) = murmur.setMood(date, id, word)
 
     private val _draft = MutableStateFlow(prefs.getString(KEY_DRAFT, "").orEmpty())
     val draft: StateFlow<String> = _draft.asStateFlow()
@@ -228,8 +376,11 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
                 .collect { load() }
         }
         // A photo deleted or moved: look the collection's photos up again.
-        viewModelScope.launch { roll.changes().collect { sightingPhotos.clear(); sightingPhotosGone.clear() } }
+        viewModelScope.launch { roll.changes().collect { sightingPhotos.clear(); sightingPhotosGone.clear(); rollVersion++ } }
         load()
+        // Ready before the first visit to 探索 (§20), once Today itself has settled.
+        viewModelScope.launch { runExploreBuilds() }
+        viewModelScope.launch { kotlinx.coroutines.delay(EXPLORE_WARM_MS); refreshExplore() }
     }
 
     fun reload() { reloadRequests.value++ }
@@ -239,6 +390,8 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
         reload()
         refreshWeather()
         WeatherAlerts.schedule(context)
+        HabitReminder.schedule(context)
+        com.openminis.app.data.murmur.MurmurReminder.rescheduleAll(context)
     }
 
     fun loadOlder() {
@@ -335,6 +488,8 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
                     weatherAlert = WeatherAlerts.active(context, openHabitNames(todayHabits)),
                 )
             }
+            _state.update { it.copy(murmurReady = murmur.ready, cloudAvailable = murmur.cloudAvailable()) }
+            murmur.onDays(days)
             if (showPlaces) resolvePlaces(days)
             requestSuggestions(days)
         }
@@ -1008,6 +1163,17 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
         if (on) askNotificationsOnce(force = true)
     }
 
+    fun setHabitReminder(on: Boolean) {
+        HabitReminder.setEnabled(context, on)
+        _state.update { it.copy(habitReminder = on) }
+        if (on) askNotificationsOnce(force = true)
+    }
+
+    fun setHabitReminderTime(minute: Int) {
+        HabitReminder.setMinuteOfDay(context, minute)
+        _state.update { it.copy(habitReminderMinute = HabitReminder.minuteOfDay(context)) }
+    }
+
     fun dismissWeatherAlert() {
         WeatherAlerts.dismiss(context)
         _state.update { it.copy(weatherAlert = null) }
@@ -1018,7 +1184,7 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
      * Asked once, after the location answer so two prompts never stack (§16.6).
      */
     private fun askNotificationsOnce(force: Boolean = false) {
-        if (Build.VERSION.SDK_INT < 33 || !WeatherAlerts.isEnabled(context)) return
+        if (Build.VERSION.SDK_INT < 33 || !(WeatherAlerts.isEnabled(context) || HabitReminder.isEnabled(context))) return
         if (NotificationManagerCompat.from(context).areNotificationsEnabled()) return
         if (!force && prefs.getBoolean(KEY_NOTIFY_ASKED, false)) return
         prefs.edit().putBoolean(KEY_NOTIFY_ASKED, true).apply()
@@ -1069,12 +1235,15 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { store.updateHabit(id) { it.withDefinition(name, target, unit, days) } }
     }
 
-    /** Delete = archive; the line stays so past check-ins keep their name (§14.2). */
+    /** Delete = archive (§14.2), undone from the page's snackbar. */
     fun archiveHabit(habit: Habit) {
         val id = habit.id ?: return
-        viewModelScope.launch {
-            store.updateHabit(id) { it.withAttrs(mapOf(Habit.KEY_ARCHIVED to store.now().toLocalDate().toString())) }
-        }
+        viewModelScope.launch { store.archiveHabit(id) }
+    }
+
+    fun unarchiveHabit(habit: Habit) {
+        val id = habit.id ?: return
+        viewModelScope.launch { store.unarchiveHabit(id) }
     }
 
     /** A day's check-ins, one per habit with the day's total, in habits.md order; read-only. */
@@ -1232,6 +1401,7 @@ class TodayViewModel(app: Application) : AndroidViewModel(app) {
         private const val OLDER_STEP_DAYS = 7
         private const val MAX_WINDOW_DAYS = 90
         private const val RELOAD_DEBOUNCE_MS = 500L
+        private const val EXPLORE_WARM_MS = 3_000L
         private const val MAX_EXIF_READS = 5
         private const val SPECIES_PREFS = "today_species"
         private const val KEY_SPECIES_MIGRATED = "speciesNotesMigrated"

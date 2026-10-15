@@ -731,6 +731,10 @@ class MinisApp : Application(), ImageLoaderFactory {
         // Initialize session activity tracker for foreground service management
         SessionActivityTracker.init(this)
 
+        // [T-today-habit-reminder] A posted check-in reminder follows the journal:
+        // items done anywhere drop off it (Today SPEC §14.6). Idle until one is posted.
+        com.openminis.app.notification.HabitReminder.observe(this)
+
         // [T-android-session-paused-badge] Per-session badge-state queue
         // displayed in the session-list cell corner. Init early so the
         // session list can read persisted PAUSED badges on first compose.

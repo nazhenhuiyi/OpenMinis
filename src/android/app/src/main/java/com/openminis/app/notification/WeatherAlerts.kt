@@ -1,30 +1,19 @@
 package com.openminis.app.notification
 
 import android.app.AlarmManager
-import android.app.NotificationChannel
-import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
-import android.os.Build
 import android.os.SystemClock
 import androidx.core.app.NotificationCompat
-import androidx.core.app.NotificationManagerCompat
-import androidx.core.content.ContextCompat
 import com.openminis.app.R
 import com.openminis.app.data.journal.CheckIns
 import com.openminis.app.data.journal.JournalStore
 import com.openminis.app.data.journal.TodayWeather
-import com.openminis.app.logging.AppLogger
 import com.openminis.app.offload.ScheduledNotificationReceiver
 import com.openminis.app.offload.WeatherManager
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 import java.time.Instant
 import java.time.LocalDate
@@ -303,8 +292,7 @@ object WeatherAlerts {
         if (fresh.isEmpty()) return
         // The journal is only read when a notification is actually going out.
         val store = JournalStore.get(context)
-        val totals = CheckIns.totals(store.readDay(today)?.entries.orEmpty())
-        val open = store.readHabits().filter { it.dueOn(today) && (totals[it.id] ?: 0) < it.goal }.map { it.name }
+        val open = CheckIns.open(store.readHabits(), store.todayTotals(), today).map { it.habit.name }
         if (!notify(context, text(context, fresh, open))) return
         val e = p.edit()
             .putString(KEY_COUNT_DAY, today.toString())
@@ -319,9 +307,7 @@ object WeatherAlerts {
 
     /** False when notifications are off for the app or this channel. */
     private fun notify(context: Context, body: String): Boolean {
-        val nm = NotificationManagerCompat.from(context)
-        if (!nm.areNotificationsEnabled()) return false
-        ensureChannel(context)
+        NotificationKit.ensureChannel(context, CHANNEL_ID, R.string.weather_alert_channel, R.string.weather_alert_channel_description)
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle(context.getString(R.string.weather_alert_title))
@@ -331,40 +317,11 @@ object WeatherAlerts {
             .setAutoCancel(true)
             .setCategory(NotificationCompat.CATEGORY_REMINDER)
             .build()
-        return try {
-            nm.notify(NOTIFICATION_ID, notification)
-            true
-        } catch (se: SecurityException) {
-            AppLogger.info(TAG, "notify denied (POST_NOTIFICATIONS not granted)")
-            false
-        }
-    }
-
-    private fun ensureChannel(context: Context) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
-        val manager = ContextCompat.getSystemService(context, NotificationManager::class.java) ?: return
-        if (manager.getNotificationChannel(CHANNEL_ID) != null) return
-        manager.createNotificationChannel(
-            NotificationChannel(CHANNEL_ID, context.getString(R.string.weather_alert_channel), NotificationManager.IMPORTANCE_DEFAULT).apply {
-                description = context.getString(R.string.weather_alert_channel_description)
-            },
-        )
+        return NotificationKit.post(context, TAG, NOTIFICATION_ID, notification)
     }
 
     /** AlarmManager target for the hourly check. */
     class Receiver : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) {
-            val pending = goAsync()
-            val app = context.applicationContext
-            CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
-                try {
-                    withTimeoutOrNull(20_000) { check(app) }
-                } catch (t: Throwable) {
-                    AppLogger.warning(TAG, "weather alert check failed: ${t.message}")
-                } finally {
-                    pending.finish()
-                }
-            }
-        }
+        override fun onReceive(context: Context, intent: Intent) = NotificationKit.runAsync(this, context, TAG) { check(it) }
     }
 }

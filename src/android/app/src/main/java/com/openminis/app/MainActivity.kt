@@ -789,6 +789,7 @@ class MainActivity : ComponentActivity() {
                     launchSingleTop = true
                 }
             }
+            is DeepLinkAction.OpenTodayHabits -> com.openminis.app.ui.today.MainTabs.openHabits()
             is DeepLinkAction.OpenAlarmList -> {
                 // T297: minis://views/alarm now opens the system Clock app
                 // directly via AlarmClock.ACTION_SHOW_ALARMS — the in-app

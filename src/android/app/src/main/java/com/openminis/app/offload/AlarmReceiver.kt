@@ -44,6 +44,9 @@ class AlarmReceiver : BroadcastReceiver() {
             // [T-today-weather-alerts] The hourly weather check is dropped too.
             runCatching { WeatherAlerts.reschedule(context) }
                 .onFailure { AppLogger.warning(TAG, "weather alerts reschedule failed: ${it.message}") }
+            // [T-today-habit-reminder] And the evening check-in reminder.
+            runCatching { com.openminis.app.notification.HabitReminder.schedule(context, force = true) }
+                .onFailure { AppLogger.warning(TAG, "habit reminder reschedule failed: ${it.message}") }
             return
         }
 

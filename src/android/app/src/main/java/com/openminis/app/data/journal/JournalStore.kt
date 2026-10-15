@@ -172,15 +172,33 @@ class JournalStore(
         return habit
     }
 
-    /** Rewrite one habit's line (rename, new target, archive). */
-    suspend fun updateHabit(id: String, transform: (Habit) -> Habit): Boolean {
-        var ok = false
+    /** Rewrite one habit's line (rename, new target, archive); the habit as written, or null if it could not be. */
+    suspend fun updateHabit(id: String, transform: (Habit) -> Habit): Habit? {
+        var written: Habit? = null
         mutateFile(habitsFile) { text ->
             text ?: return@mutateFile null
             val habit = HabitCodec.parse(text).singleOrNull { it.id == id } ?: return@mutateFile null
-            HabitCodec.replace(text, id, transform(habit)).also { ok = it != null }
+            val next = transform(habit)
+            HabitCodec.replace(text, id, next)?.also { written = next }
         }
-        return ok
+        return written
+    }
+
+    /** Delete = archive (§14.2): the line stays so past check-ins keep their name. */
+    suspend fun archiveHabit(id: String): Habit? =
+        updateHabit(id) { it.withAttrs(mapOf(Habit.KEY_ARCHIVED to clock().toLocalDate().toString())) }
+
+    /** Undo of [archiveHabit]. */
+    suspend fun unarchiveHabit(id: String): Habit? = updateHabit(id) { it.withAttrs(mapOf(Habit.KEY_ARCHIVED to null)) }
+
+    /** Today's check-in total per habit id. */
+    suspend fun todayTotals(): Map<String, Int> = CheckIns.totals(readDay(clock().toLocalDate())?.entries.orEmpty())
+
+    /** "Done" for today without a count: fill [habit] up to its goal, never lowering it. Returns the new total. */
+    suspend fun completeCheckIn(habit: Habit, by: String? = null): Int {
+        val after = maxOf(todayTotals()[habit.id] ?: 0, habit.goal)
+        setCheckIn(clock().toLocalDate(), habit, after, by)
+        return after
     }
 
     /**

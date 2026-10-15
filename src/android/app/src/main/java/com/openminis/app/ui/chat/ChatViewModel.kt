@@ -15165,7 +15165,7 @@ Memory system (currently DISABLED):
         val habitsWriteNote = if (isHelper) {
             "Read-only for you."
         } else {
-            "Use the journal tool (habits / check_in) for them; check-ins are for today only."
+            "Use the journal tool for them (habits / check_in; add_habit / edit_habit / remove_habit when the user asks); check-ins are for today only."
         }
         val delegationOffered = !isHelper &&
             com.openminis.app.agent.jobs.AgentSettings.isEnabled(context)

@@ -159,8 +159,8 @@ import kotlinx.coroutines.delay
 // celebration after recording, and the nature collection pages.
 
 /** Soft greens for the nature pages, readable on light and dark backgrounds alike. */
-private val Leaf = Color(0xFF3F7D4E)
-private val LeafSoft = Color(0x1F3F7D4E)
+internal val Leaf = Color(0xFF3F7D4E)
+internal val LeafSoft = Color(0x1F3F7D4E)
 
 @Composable
 fun groupLabel(group: String?): String = stringResource(
@@ -197,7 +197,7 @@ private fun guessPhrase(name: String, genus: Boolean, prob: Float): String {
 }
 
 @Composable
-private fun PhotoImage(photo: CameraPhoto?, modifier: Modifier, size: Int = 600, fallback: String = "✦") {
+internal fun PhotoImage(photo: CameraPhoto?, modifier: Modifier, size: Int = 600, fallback: String = "✦") {
     if (photo == null) {
         Box(modifier.background(LeafSoft), contentAlignment = Alignment.Center) { Text(fallback, fontSize = 34.sp) }
         return
@@ -1136,7 +1136,9 @@ internal fun NatureCollectionPage(vm: TodayViewModel, open: String?, onAsk: (Str
     // The last list at once, then brought up to date (only changed days are read again).
     var list by remember { mutableStateOf(vm.lastCollection) }
     var filter by remember { mutableStateOf<String?>(null) }
-    var detail by remember { mutableStateOf(open) }
+    // The kinds opened, one on top of another (look-alikes lead on); back steps out one at a time.
+    var trail by remember { mutableStateOf(listOfNotNull(open)) }
+    val detail = trail.lastOrNull()
     // Managing (§17.4): picked kinds, what is waiting for "Remove?", and the undo.
     var selecting by remember { mutableStateOf(false) }
     var selected by remember { mutableStateOf(emptySet<String>()) }
@@ -1224,7 +1226,7 @@ internal fun NatureCollectionPage(vm: TodayViewModel, open: String?, onAsk: (Str
                                 SpeciesCard(
                                     c,
                                     selected = if (selecting) c.latin in selected else null,
-                                    onClick = { if (selecting) toggle() else detail = c.latin },
+                                    onClick = { if (selecting) toggle() else trail = trail + c.latin },
                                     onLongClick = { if (!selecting) { selecting = true; selected = setOf(c.latin) } else toggle() },
                                 )
                             }
@@ -1238,7 +1240,14 @@ internal fun NatureCollectionPage(vm: TodayViewModel, open: String?, onAsk: (Str
                 if (d != null) keep = d
                 keep?.let { sp ->
                     key(sp.latin) {
-                        SpeciesPage(vm, sp, l.orEmpty(), onOpen = { detail = it }, onBack = { detail = null }, onAsk = onAsk, onRemove = { asking = it })
+                        SpeciesPage(
+                            vm, sp, l.orEmpty(),
+                            onOpen = { trail = trail + it },
+                            // Opened straight onto a kind (from the timeline or 探索): stepping out of it leaves the page.
+                            onBack = { if (trail.size == 1 && open != null) onDismiss() else trail = trail.dropLast(1) },
+                            onAsk = onAsk,
+                            onRemove = { asking = it },
+                        )
                     }
                 }
             }

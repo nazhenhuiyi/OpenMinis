@@ -310,6 +310,8 @@ fun AppNavigation(
             is DeepLinkAction.OpenPermissionSettings -> {
                 navController.safeNavigate(Routes.PERMISSIONS)
             }
+            // The Today tab is the overlay above the NavHost: nothing to navigate.
+            is DeepLinkAction.OpenTodayHabits -> com.openminis.app.ui.today.MainTabs.openHabits()
             // OpenHtmlPreview is handled by setting startDestination
             // (see below) so the NavHost mounts directly into the right
             // chat — no safeNavigate dance, no sessions-list flash.
@@ -531,12 +533,13 @@ fun AppNavigation(
     val chatListVisible by com.openminis.app.ui.today.MainTabs.chatListVisible.collectAsState()
     val currentEntry by navController.currentBackStackEntryAsState()
     val currentRoute = currentEntry?.destination?.route
-    val onToday = currentTab == com.openminis.app.ui.today.MainTabs.Tab.TODAY
+    // Today and Explore (§20) are both overlays; only chat is the NavHost.
+    val overlayTab = currentTab != com.openminis.app.ui.today.MainTabs.Tab.CHAT
     val chatAtRoot = (currentRoute == Routes.SESSION_LIST || currentRoute == Routes.CHAT) && chatListVisible
     // The bar stays in the layout while the keyboard is up (the keyboard simply
     // covers it). Hiding it on IME used to make the composer drop to the very
     // bottom as the keyboard closed and then jump up when the bar came back.
-    val showTabBar = onToday || chatAtRoot
+    val showTabBar = overlayTab || chatAtRoot
     // Anything that moves the NavHost off its root (deep link, notification,
     // share, a launch-mode resume, the user tapping into Settings) belongs to
     // the chat tab, so every existing entry point keeps landing where it did.
@@ -551,7 +554,8 @@ fun AppNavigation(
     }
     // Back on Today leaves the app, and must never pop the hidden chat stack.
     // Composed only while Today shows, so it registers above the NavHost's own.
-    if (onToday) {
+    // (Explore registers its own handler, which steps back to Today first.)
+    if (overlayTab) {
         androidx.activity.compose.BackHandler {
             (context as? android.app.Activity)?.moveTaskToBack(true)
         }
@@ -585,7 +589,7 @@ fun AppNavigation(
     ) {
     androidx.compose.foundation.layout.Box(
         Modifier.fillMaxSize().then(
-            if (onToday) Modifier.clearAndSetSemantics {} else Modifier,
+            if (overlayTab) Modifier.clearAndSetSemantics {} else Modifier,
         ),
     ) {
     NavHost(
@@ -1638,8 +1642,12 @@ fun AppNavigation(
         }
     }
     } // semantics box
-    if (onToday) {
-        com.openminis.app.ui.today.TodayScreen(onAskMinis = askMinis, modifier = Modifier.fillMaxSize())
+    when (currentTab) {
+        com.openminis.app.ui.today.MainTabs.Tab.TODAY ->
+            com.openminis.app.ui.today.TodayScreen(onAskMinis = askMinis, modifier = Modifier.fillMaxSize())
+        com.openminis.app.ui.today.MainTabs.Tab.EXPLORE ->
+            com.openminis.app.ui.today.ExploreScreen(onAskMinis = askMinis, modifier = Modifier.fillMaxSize())
+        com.openminis.app.ui.today.MainTabs.Tab.CHAT -> Unit
     }
     } // content box
     if (showTabBar) {

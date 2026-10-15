@@ -60,9 +60,10 @@ class ScheduledNotificationReceiver : BroadcastReceiver() {
          * It also stops a malicious app from filling in extras on an intent
          * that would then be sent AS Minis.
          */
-        fun contentIntentFor(context: Context, notifId: Int): PendingIntent {
+        fun contentIntentFor(context: Context, notifId: Int, deepLink: android.net.Uri? = null): PendingIntent {
             val launchIntent = Intent(context, MainActivity::class.java).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                data = deepLink
             }
             return PendingIntent.getActivity(
                 context,
