@@ -879,6 +879,23 @@ object SessionActivityTracker {
     /** Last dispatched intent: true = running, false = stopped. */
     private var serviceWanted = false
 
+    /**
+     * Starts dispatched that the service's onStartCommand hasn't handled yet.
+     * Stopping a service while a startForegroundService() for it is still
+     * pending kills the process (ForegroundServiceDidNotStartInTimeException,
+     * "Bringing down service while still waiting for start foreground") —
+     * seen when a chat's presence is set and cleared within milliseconds, as
+     * when "Ask Minis" hops from one session to a new one. Such a stop is left
+     * to the service: its onStartCommand backstop finds nothing to run,
+     * promotes, demotes and stops itself.
+     */
+    private val pendingStarts = java.util.concurrent.atomic.AtomicInteger(0)
+
+    /** Called by [AgentForegroundService] once it has handled a start. */
+    fun onStartHandled() {
+        pendingStarts.updateAndGet { maxOf(0, it - 1) }
+    }
+
     private fun startServiceIfNeeded() {
         val context = appContext ?: run {
             Log.w(TAG, "Context not initialized, cannot start service")
@@ -893,6 +910,7 @@ object SessionActivityTracker {
                 return
             }
             serviceWanted = true
+            pendingStarts.incrementAndGet()
             AgentForegroundService.startService(
                 context,
                 sessionCountForNotification(),
@@ -912,6 +930,7 @@ object SessionActivityTracker {
                 return
             }
             serviceWanted = true
+            pendingStarts.incrementAndGet()
             AgentForegroundService.startService(
                 context,
                 sessionCountForNotification(),
@@ -975,6 +994,10 @@ object SessionActivityTracker {
         }
         synchronized(serviceLock) {
             serviceWanted = false
+            if (pendingStarts.get() > 0) {
+                Log.d(TAG, "All sessions complete; a start is still pending, the service will stop itself")
+                return
+            }
             AgentForegroundService.stopService(context)
             Log.d(TAG, "All sessions complete, service stopped")
         }

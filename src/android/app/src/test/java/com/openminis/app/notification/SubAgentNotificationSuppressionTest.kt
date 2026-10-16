@@ -58,13 +58,14 @@ class SubAgentNotificationSuppressionTest {
         val f = File("src/main/java/com/openminis/app/notification/BackgroundTaskNotifier.kt")
         assertTrue("BackgroundTaskNotifier.kt not found (cwd=${File(".").absolutePath})", f.isFile)
         val text = f.readText()
+        // isHiddenFromLists = isChild, or a murmur's chat not yet opened.
         assertTrue(
             "the child-session check is gone — sub agent completions will post " +
                 "system notifications again",
-            text.contains("session?.isChild == true"),
+            text.contains("session?.isHiddenFromLists == true"),
         )
         // …and that it returns rather than merely logging.
-        val idx = text.indexOf("session?.isChild == true")
+        val idx = text.indexOf("session?.isHiddenFromLists == true")
         val after = text.substring(idx, minOf(idx + 400, text.length))
         assertTrue(
             "the check no longer aborts the notification",

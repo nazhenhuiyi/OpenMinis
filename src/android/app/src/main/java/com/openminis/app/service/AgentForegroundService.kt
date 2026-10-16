@@ -208,7 +208,10 @@ class AgentForegroundService : Service() {
         Log.d(TAG, "Service created")
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int =
+        handleStart(intent, flags, startId).also { SessionActivityTracker.onStartHandled() }
+
+    private fun handleStart(intent: Intent?, flags: Int, startId: Int): Int {
         // [T-STALL-DIAG] Revival probe. `intent == null` means the SYSTEM
         // re-created this service under START_STICKY after the process died —
         // the suspected "dirty shell" path behind "killing the app doesn't
