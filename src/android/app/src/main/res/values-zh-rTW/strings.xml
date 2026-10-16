@@ -2105,7 +2105,7 @@
     <string name="tab_today">今日</string>
     <string name="tab_chat">聊天</string>
     <string name="tab_explore">探索</string>
-    <string name="explore_tagline">從你自己的日子裡翻出來的</string>
+    <string name="explore_tagline">翻翻自己走過的日子</string>
     <string name="explore_today_page">今天翻到的一頁</string>
     <string name="explore_random">隨手翻到的一頁</string>
     <string name="explore_one_month_ago">一個月前的今天</string>
@@ -2123,8 +2123,6 @@
     <string name="explore_food_empty">寫下做了什麼、吃了什麼</string>
     <string name="explore_food_count">%1$d 則碎碎念</string>
     <string name="explore_firsts">第一次</string>
-    <string name="explore_first_saw">第一次見</string>
-    <string name="explore_first_written">第一次寫到</string>
     <string name="explore_wishes">心願單</string>
     <string name="explore_wishes_all">全部</string>
     <string name="explore_wishes_count">還有 %1$d 件想做的事</string>
@@ -2369,7 +2367,6 @@
         <item quantity="other">今日打卡還差 %d 項</item>
     </plurals>
     <!-- [T-today-murmur] Mood colours and smart suggestions (Today SPEC §19) -->
-    <string name="today_mood_menu">心情</string>
     <string name="today_mood_title">心情</string>
     <string name="today_settings_mood_colors">心情顏色</string>
     <string name="today_settings_smart_suggest">智慧建議</string>
@@ -2388,6 +2385,21 @@
     <string name="today_suggest_opened_sub">已在聊天裡</string>
     <string name="today_suggest_continue">繼續聊</string>
     <string name="today_suggest_working">Minis 正在看這條…</string>
+    <string name="today_settings_title">設定</string>
+    <string name="today_settings_section_record">記錄</string>
+    <string name="today_settings_section_murmur">碎碎念</string>
+    <string name="today_settings_albums_sub">除了相機照片，還有哪些相簿出現在今日</string>
+    <string name="today_settings_mood_colors_sub">在時間線上用顏色標出每天的心情</string>
+    <string name="today_settings_smart_suggest_sub">Minis 先替你看看可能要做、要查的碎碎念</string>
+    <string name="today_suggest_page_title">智慧建議</string>
+    <string name="today_suggest_page_off">智慧建議還沒開啟。開啟後，Minis 會先替你看看可能要做、要查的碎碎念。</string>
+    <string name="today_suggest_page_to_settings">前往設定</string>
+    <string name="today_suggest_page_empty">最近 7 天還沒有建議。寫下想做、想查的事，Minis 會先替你看看。</string>
+    <string name="today_suggest_page_working">Minis 正在看一則碎碎念…</string>
+    <string name="explore_mood_sub">最近一週</string>
+    <string name="explore_suggest_off">未開啟</string>
+    <string name="explore_suggest_today">今天 %1$d 則</string>
+    <string name="explore_suggest_recent">最近 7 天</string>
     <string name="today_suggest_dismissed">這條建議不再顯示</string>
     <string name="today_mood_hint_snack">時間旁的小圖示是那一刻的心情，點它可以改</string>
     <string name="today_mood_hint_action">看月曆</string>

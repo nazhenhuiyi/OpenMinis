@@ -2309,7 +2309,7 @@
     <string name="tab_today">Today</string>
     <string name="tab_chat">Chat</string>
     <string name="tab_explore">Explore</string>
-    <string name="explore_tagline">Turned up from your own days</string>
+    <string name="explore_tagline">Leafing back through your days</string>
     <string name="explore_today_page">Today\'s page</string>
     <string name="explore_random">A page at random</string>
     <string name="explore_one_month_ago">A month ago today</string>
@@ -2327,8 +2327,6 @@
     <string name="explore_food_empty">Write what you cooked or ate</string>
     <string name="explore_food_count">%1$d murmurs</string>
     <string name="explore_firsts">Firsts</string>
-    <string name="explore_first_saw">First seen</string>
-    <string name="explore_first_written">First written</string>
     <string name="explore_wishes">Wish list</string>
     <string name="explore_wishes_all">All</string>
     <string name="explore_wishes_count">%1$d things you would like to do</string>
@@ -2574,7 +2572,6 @@
         <item quantity="other">%d check-ins left today</item>
     </plurals>
     <!-- [T-today-murmur] Mood colours and smart suggestions (Today SPEC §19) -->
-    <string name="today_mood_menu">Mood</string>
     <string name="today_mood_title">Mood</string>
     <string name="today_settings_mood_colors">Mood colours</string>
     <string name="today_settings_smart_suggest">Smart suggestions</string>
@@ -2593,6 +2590,21 @@
     <string name="today_suggest_opened_sub">In your chats now</string>
     <string name="today_suggest_continue">Continue</string>
     <string name="today_suggest_working">Minis is looking at this…</string>
+    <string name="today_settings_title">Settings</string>
+    <string name="today_settings_section_record">Recording</string>
+    <string name="today_settings_section_murmur">Murmurs</string>
+    <string name="today_settings_albums_sub">Albums besides the camera that show on Today</string>
+    <string name="today_settings_mood_colors_sub">Mark each day\'s mood on the timeline</string>
+    <string name="today_settings_smart_suggest_sub">Minis looks into murmurs that may need doing</string>
+    <string name="today_suggest_page_title">Smart suggestions</string>
+    <string name="today_suggest_page_off">Smart suggestions are off. Turn them on and Minis looks into murmurs that may need doing.</string>
+    <string name="today_suggest_page_to_settings">Go to settings</string>
+    <string name="today_suggest_page_empty">Nothing in the last 7 days. Write down what you want to do or look up, and Minis will look into it first.</string>
+    <string name="today_suggest_page_working">Minis is looking at a murmur…</string>
+    <string name="explore_mood_sub">Last 7 days</string>
+    <string name="explore_suggest_off">Off</string>
+    <string name="explore_suggest_today">%1$d today</string>
+    <string name="explore_suggest_recent">Last 7 days</string>
     <string name="today_suggest_dismissed">Suggestion hidden</string>
     <string name="today_mood_hint_snack">The little face after a murmur\'s time is its mood — tap to change</string>
     <string name="today_mood_hint_action">Month</string>

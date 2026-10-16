@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -78,6 +80,17 @@ internal fun AppearOnce(fresh: Boolean, onAppeared: () -> Unit, content: @Compos
         onAppeared()
     }
     AnimatedVisibility(shown, enter = fadeIn(tween(350)) + slideInVertically(tween(350)) { -it / 3 }) { content() }
+}
+
+/** Nothing here yet: a big emoji over a quiet line, centred, and maybe a way forward under it. */
+@Composable
+internal fun TodayEmpty(emoji: String, text: String, action: @Composable () -> Unit = {}) {
+    Column(Modifier.fillMaxSize().padding(40.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+        Text(emoji, fontSize = 56.sp)
+        Spacer(Modifier.height(16.dp))
+        Text(text, fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, lineHeight = 22.sp, textAlign = TextAlign.Center)
+        action()
+    }
 }
 
 /** Something just done, said in a short snackbar that can take it back; a newer one replaces it. */

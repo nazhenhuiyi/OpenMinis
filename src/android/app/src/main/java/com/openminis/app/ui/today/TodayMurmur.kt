@@ -29,6 +29,9 @@ data class MoodNote(val id: String, val date: LocalDate, val atMs: Long, val bod
     val tier: MoodTier? get() = mood?.let(MoodTier::of)
 }
 
+/** A murmur Minis prepared a chat for (§19.3), as the 智能建议 page lists it. */
+data class SuggestionItem(val id: String, val date: LocalDate, val atMs: Long, val body: String, val suggestion: MurmurSuggestion)
+
 data class MoodDay(val date: LocalDate, val tier: MoodTier?, val notes: List<MoodNote>)
 
 /**
@@ -180,8 +183,7 @@ internal class TodayMurmur(
         for (n in notesOf(days)) {
             val id = n.entry.id!!
             val s = index.suggestion(id, n.entry.body) ?: continue
-            val live = s.state == MurmurSuggestion.OFFER || s.state == MurmurSuggestion.OPENED
-            if (live && s.sessionId.isNotBlank() && Instant.ofEpochMilli(s.createdMs).atZone(zone).toLocalDate() == today) offers += id to s
+            if (s.isLive && Instant.ofEpochMilli(s.createdMs).atZone(zone).toLocalDate() == today) offers += id to s
         }
         offers.sortedByDescending { it.second.createdMs }.take(MAX_OFFERS_A_DAY).forEach { (id, s) -> out[id] = s }
         return out
@@ -190,26 +192,45 @@ internal class TodayMurmur(
     // ── What the user does with a suggestion ───────────────────────────────
 
     /** Apply [change]; returns the suggestion as it was, for undo. */
-    private fun update(note: TodayNote, change: (MurmurSuggestion) -> MurmurSuggestion): MurmurSuggestion? {
-        val id = note.entry.id ?: return null
-        val s = index.suggestion(id, note.entry.body) ?: return null
+    private fun update(id: String, body: String, change: (MurmurSuggestion) -> MurmurSuggestion): MurmurSuggestion? {
+        val s = index.suggestion(id, body) ?: return null
         index.putSuggestion(id, change(s))
         publishFor(lastDays)
         return s
     }
 
     /** Tapped: the chat joins the session list; returns it to open. */
-    suspend fun open(note: TodayNote): String? {
-        val sid = update(note) { it.copy(state = MurmurSuggestion.OPENED) }?.sessionId?.takeIf { it.isNotBlank() } ?: return null
+    suspend fun open(id: String, body: String): String? {
+        val sid = update(id, body) { it.copy(state = MurmurSuggestion.OPENED) }?.sessionId?.takeIf { it.isNotBlank() } ?: return null
         MurmurAgent.open(context, sid)
         return sid
     }
 
     /** "不用" (×). Undo puts it back; the chat itself goes with the next day's clear-out. */
-    fun dismiss(note: TodayNote): MurmurSuggestion? = update(note) { it.copy(state = MurmurSuggestion.DISMISSED) }
+    fun dismiss(id: String, body: String): MurmurSuggestion? = update(id, body) { it.copy(state = MurmurSuggestion.DISMISSED) }
 
-    fun restore(note: TodayNote, previous: MurmurSuggestion) {
-        update(note) { previous }
+    fun restore(id: String, body: String, previous: MurmurSuggestion) {
+        update(id, body) { previous }
+    }
+
+    /**
+     * The 智能建议 page: every chat Minis prepared in the last
+     * [MurmurAgent.KEEP_DAYS] days, opened or not, newest first.
+     */
+    suspend fun suggestionList(): List<SuggestionItem> = withContext(Dispatchers.IO) {
+        val today = LocalDate.now(zone)
+        val out = ArrayList<SuggestionItem>()
+        // A murmur goes to Minis within a day of being written: one day more than the window covers it.
+        for (k in 0..MurmurAgent.KEEP_DAYS) {
+            val date = today.minusDays(k)
+            for (e in store.readDay(date)?.entries.orEmpty()) {
+                val id = e.id ?: continue
+                val s = index.suggestion(id, e.body) ?: continue
+                if (!s.isLive || !MurmurAgent.isRecent(s, zone)) continue
+                out += SuggestionItem(id, date, e.at?.toInstant()?.toEpochMilli() ?: s.createdMs, e.body, s)
+            }
+        }
+        out.sortedByDescending { it.suggestion.createdMs }
     }
 
     /** Whether Minis has a model to work with; without one the switch says so (§19.3). */
@@ -223,23 +244,30 @@ internal class TodayMurmur(
     // ── Mood page (§19.2) ─────────────────────────────────────────────────
 
     suspend fun month(ym: YearMonth): List<MoodDay> {
-        val days = ArrayList<MoodDay>()
         val untagged = ArrayList<JournalEntry>()
-        for (d in 1..ym.lengthOfMonth()) {
-            val date = ym.atDay(d)
-            val entries = store.readDay(date)?.entries.orEmpty()
-                .filter { it.id != null && it.body.isNotBlank() && !CheckIns.isCheckIn(it) }
-            val notes = entries.map { e ->
-                val user = userMood(e)
-                val tags = index.tags(e.id!!, e.body)
-                if (user == null && (tags == null || (moodColors && tags.moodConf == null))) untagged += e
-                // Not sure enough of the model's mood: left uncoloured, still settable.
-                MoodNote(e.id!!, date, e.at?.toInstant()?.toEpochMilli() ?: 0L, e.body, user ?: tags?.shownMood, user != null)
-            }
-            days += MoodDay(date, MoodTier.ofDay(notes.mapNotNull { it.tier }), notes)
-        }
+        val days = (1..ym.lengthOfMonth()).map { moodDay(ym.atDay(it), untagged) }
         lastMonthUntagged = untagged
         return days
+    }
+
+    /** The last [n] days' moods, oldest first: 探索's glance at the week (§20.1). */
+    suspend fun recentMoods(n: Int): List<MoodDay> = withContext(Dispatchers.IO) {
+        val today = LocalDate.now(zone)
+        (n - 1 downTo 0).map { moodDay(today.minusDays(it.toLong()), null) }
+    }
+
+    /** One day's murmurs and their moods; ones with no mood to show yet go to [untagged]. */
+    private suspend fun moodDay(date: LocalDate, untagged: MutableList<JournalEntry>?): MoodDay {
+        val entries = store.readDay(date)?.entries.orEmpty()
+            .filter { it.id != null && it.body.isNotBlank() && !CheckIns.isCheckIn(it) }
+        val notes = entries.map { e ->
+            val user = userMood(e)
+            val tags = index.tags(e.id!!, e.body)
+            if (user == null && (tags == null || tags.moodConf == null)) untagged?.add(e)
+            // Not sure enough of the model's mood: left uncoloured, still settable.
+            MoodNote(e.id!!, date, e.at?.toInstant()?.toEpochMilli() ?: 0L, e.body, user ?: tags?.shownMood, user != null)
+        }
+        return MoodDay(date, MoodTier.ofDay(notes.mapNotNull { it.tier }), notes)
     }
 
     private var lastMonthUntagged: List<JournalEntry> = emptyList()

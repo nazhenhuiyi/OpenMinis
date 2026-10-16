@@ -12,9 +12,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.time.Instant
 import java.time.LocalDate
-import java.time.ZoneId
 
 /**
  * [T-today-murmur-agent] Smart suggestions' background work (SPEC §19.3), owned
@@ -110,13 +108,12 @@ object MurmurAgentQueue {
                 _changes.update { it + 1 }
             }
             is Task.Clear -> {
-                // Chats never opened, for offers no longer shown (not today's) — or, [all], every one.
-                val zone = ZoneId.systemDefault()
-                val today = LocalDate.now(zone)
+                // Chats never opened that the 智能建议 page no longer lists (turned down, or
+                // older than [MurmurAgent.KEEP_DAYS]) — or, [all], every one.
                 val cleared = HashMap<String, MurmurSuggestion>()
                 for ((id, s) in index.allSuggestions()) {
                     if (s.sessionId.isBlank() || s.state == MurmurSuggestion.OPENED) continue
-                    if (!task.all && !Instant.ofEpochMilli(s.createdMs).atZone(zone).toLocalDate().isBefore(today)) continue
+                    if (!task.all && s.isLive && MurmurAgent.isRecent(s)) continue
                     runCatching { MurmurAgent.discard(app, s.sessionId) }
                     cleared[id] = s.copy(sessionId = "")
                 }

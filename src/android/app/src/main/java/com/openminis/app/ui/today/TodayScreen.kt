@@ -58,7 +58,6 @@ import androidx.compose.material.icons.outlined.Forum
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -77,7 +76,6 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
@@ -121,7 +119,6 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.openminis.app.R
 import com.openminis.app.data.photos.CameraPhoto
-import com.openminis.app.data.photos.CameraRollRules
 import com.openminis.app.data.photos.CameraRollSource
 import com.openminis.app.data.photos.VideoThumb
 import com.openminis.app.data.photos.stills
@@ -288,7 +285,7 @@ fun TodayScreen(
     var confirmDelete by remember { mutableStateOf<TodayNote?>(null) }
     // Photos to show and which one was tapped.
     var viewer by remember { mutableStateOf<Pair<List<CameraPhoto>, Int>?>(null) }
-    var showAlbums by remember { mutableStateOf(false) }
+    var showSettings by remember { mutableStateOf(false) }
     // "What is it?" for a suggestion on the timeline (§17.3): its photos, the guess, and the group for "other possibilities".
     var whatIs by remember { mutableStateOf<WhatIs?>(null) }
     // "Identify" (§17.3): which photos, and which one to start on (null = the best-looking).
@@ -353,26 +350,11 @@ fun TodayScreen(
         Column(Modifier.fillMaxSize().statusBarsPadding().imePadding()) {
             TodayTopBar(
                 today = state.today,
-                recordLocation = state.recordLocation,
-                onRecordLocation = vm::setRecordLocation,
-                showWeather = state.showWeather,
-                onShowWeather = vm::setShowWeather,
-                weatherAlerts = state.weatherAlerts,
-                onWeatherAlerts = vm::setWeatherAlerts,
-                onAlbums = { showAlbums = true },
                 onHabits = { openHabits(null) },
-                speciesCpu = if (state.speciesCpuOffered) state.speciesCpu else null,
-                onSpeciesCpu = vm::setSpeciesCpu,
+                onSettings = { showSettings = true },
                 habits = state.todayHabits,
                 // No habits at all → a ghost chip that leads to the manager (SPEC §14.3).
                 ghostChip = state.loaded && state.habits.none { !it.archived },
-                murmurReady = state.murmurReady,
-                moodColors = state.moodColors,
-                onMoodColors = vm::setMoodColors,
-                onMood = { moodStart = state.today },
-                smartSuggest = state.smartSuggest,
-                onSmartSuggest = vm::setSmartSuggest,
-                cloudAvailable = state.cloudAvailable,
             )
             // Pinned under the header while it applies, so it is seen without scrolling (§16.5).
             state.weatherAlert?.let { WeatherAlertBanner(it, onDismiss = vm::dismissWeatherAlert) }
@@ -427,9 +409,9 @@ fun TodayScreen(
                                 suggestionFresh = row.note.entry.id in murmurFresh,
                                 onSuggestionAppeared = { row.note.entry.id?.let(vm::murmurSeen) },
                                 // Opening it carries on in the chat Minis prepared; "不用" can be taken back (§19.3).
-                                onOpenSuggestion = { scope.launch { vm.openMurmurChat(row.note)?.let(onOpenChat) } },
+                                onOpenSuggestion = { scope.launch { row.note.entry.id?.let { vm.openMurmurChat(it, row.note.entry.body) }?.let(onOpenChat) } },
                                 onDismissSuggestion = {
-                                    vm.dismissMurmurSuggestion(row.note)?.let { undo -> offerUndo(context.getString(R.string.today_suggest_dismissed), undo) }
+                                    row.note.entry.id?.let { vm.dismissMurmurSuggestion(it, row.note.entry.body) }?.let { undo -> offerUndo(context.getString(R.string.today_suggest_dismissed), undo) }
                                 },
                                 moodWord = row.note.entry.id?.let { state.noteMood[it] },
                                 onSetMood = { w -> row.note.entry.id?.let { vm.setNoteMood(row.note.date, it, w) } },
@@ -661,9 +643,7 @@ fun TodayScreen(
         )
     }
 
-    if (showAlbums) {
-        AlbumsDialog(vm = vm, selected = state.includedAlbums, onDone = { vm.setIncludedAlbums(it); showAlbums = false })
-    }
+    if (showSettings) TodaySettingsPage(vm, onDismiss = { showSettings = false })
 }
 
 /** The check-in page is open; [focusId] = the habit whose adjust panel it opens on. */
@@ -692,29 +672,12 @@ private fun askPayload(context: android.content.Context, target: Target, zone: Z
 @Composable
 private fun TodayTopBar(
     today: LocalDate,
-    recordLocation: Boolean,
-    onRecordLocation: (Boolean) -> Unit,
-    showWeather: Boolean,
-    onShowWeather: (Boolean) -> Unit,
-    weatherAlerts: Boolean,
-    onWeatherAlerts: (Boolean) -> Unit,
-    onAlbums: () -> Unit,
     onHabits: () -> Unit,
-    speciesCpu: Boolean?,
-    onSpeciesCpu: (Boolean) -> Unit,
+    onSettings: () -> Unit,
     habits: List<com.openminis.app.data.journal.HabitProgress>,
     ghostChip: Boolean,
-    murmurReady: Boolean = false,
-    moodColors: Boolean = true,
-    onMoodColors: (Boolean) -> Unit = {},
-    onMood: () -> Unit = {},
-    smartSuggest: Boolean = false,
-    onSmartSuggest: (Boolean) -> Unit = {},
-    cloudAvailable: Boolean = true,
 ) {
     var menu by remember { mutableStateOf(false) }
-    var askCpu by remember { mutableStateOf(false) }
-    var askSuggest by remember { mutableStateOf(false) }
     Row(Modifier.fillMaxWidth().padding(start = 18.dp, end = 6.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(stringResource(R.string.tab_today), fontSize = 22.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.width(10.dp))
@@ -722,91 +685,31 @@ private fun TodayTopBar(
         if (habits.isNotEmpty() || ghostChip) HabitsChip(habits, onClick = onHabits)
         Box {
             IconButton(onClick = { menu = true }) { Icon(Icons.Outlined.MoreHoriz, contentDescription = null) }
+            // The switches live on the settings page (also the gear on 探索).
             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                DropdownMenuItem(
-                    text = { Text(stringResource(R.string.today_settings_location)) },
-                    trailingIcon = { Switch(checked = recordLocation, onCheckedChange = null) },
-                    onClick = { onRecordLocation(!recordLocation) },
-                )
-                DropdownMenuItem(
-                    text = { Text(stringResource(R.string.today_settings_weather)) },
-                    trailingIcon = { Switch(checked = showWeather, onCheckedChange = null) },
-                    onClick = { onShowWeather(!showWeather) },
-                )
-                DropdownMenuItem(
-                    text = { Text(stringResource(R.string.today_settings_weather_alerts)) },
-                    trailingIcon = { Switch(checked = weatherAlerts, onCheckedChange = null) },
-                    onClick = { onWeatherAlerts(!weatherAlerts) },
-                )
                 DropdownMenuItem(
                     text = { Text(stringResource(R.string.today_habits_menu)) },
                     onClick = { menu = false; onHabits() },
                     modifier = Modifier.testTag("today_menu_habits"),
                 )
                 DropdownMenuItem(
-                    text = { Text(stringResource(R.string.today_settings_albums)) },
-                    onClick = { menu = false; onAlbums() },
+                    text = { Text(stringResource(R.string.today_settings_title)) },
+                    onClick = { menu = false; onSettings() },
                 )
-                // The 碎碎念 model is on this phone (§19).
-                if (murmurReady) {
-                    if (moodColors) DropdownMenuItem(
-                        text = { Text(stringResource(R.string.today_mood_menu)) },
-                        onClick = { menu = false; onMood() },
-                    )
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.today_settings_mood_colors)) },
-                        trailingIcon = { Switch(checked = moodColors, onCheckedChange = null) },
-                        onClick = { onMoodColors(!moodColors) },
-                    )
-                    DropdownMenuItem(
-                        text = {
-                            Column {
-                                Text(stringResource(R.string.today_settings_smart_suggest))
-                                if (!cloudAvailable && !smartSuggest) Text(
-                                    stringResource(R.string.today_settings_smart_suggest_no_model),
-                                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        },
-                        enabled = cloudAvailable || smartSuggest,
-                        trailingIcon = { Switch(checked = smartSuggest, onCheckedChange = null, enabled = cloudAvailable || smartSuggest) },
-                        // Off → on says first what leaves the phone (§19.3).
-                        onClick = { if (smartSuggest) onSmartSuggest(false) else { menu = false; askSuggest = true } },
-                    )
-                }
-                // Only on phones whose NPU can't run the model: the NPU always comes first (§17.1).
-                if (speciesCpu != null) {
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.today_settings_species_cpu)) },
-                        trailingIcon = { Switch(checked = speciesCpu, onCheckedChange = null) },
-                        onClick = { if (speciesCpu) onSpeciesCpu(false) else { menu = false; askCpu = true } },
-                        modifier = Modifier.testTag("today_menu_species_cpu"),
-                    )
-                }
             }
         }
-    }
-    if (askCpu) {
-        AlertDialog(
-            onDismissRequest = { askCpu = false },
-            title = { Text(stringResource(R.string.today_species_cpu_title)) },
-            text = { Text(stringResource(R.string.today_species_cpu_body)) },
-            confirmButton = { TextButton(onClick = { askCpu = false; onSpeciesCpu(true) }) { Text(stringResource(R.string.today_species_cpu_on)) } },
-            dismissButton = { TextButton(onClick = { askCpu = false }) { Text(stringResource(android.R.string.cancel)) } },
-        )
-    }
-    if (askSuggest) {
-        AlertDialog(
-            onDismissRequest = { askSuggest = false },
-            title = { Text(stringResource(R.string.today_suggest_consent_title)) },
-            text = { Text(stringResource(R.string.today_suggest_consent_body)) },
-            confirmButton = { TextButton(onClick = { askSuggest = false; onSmartSuggest(true) }) { Text(stringResource(R.string.today_suggest_turn_on)) } },
-            dismissButton = { TextButton(onClick = { askSuggest = false }) { Text(stringResource(android.R.string.cancel)) } },
-        )
     }
 }
 
 internal fun dayLabel(d: LocalDate): String = localDate(d, "MMMdEEE")
+
+/** A day as the timeline heads it: "今天 · 10月12日周一", "昨天 · …", else just the date. */
+@Composable
+internal fun dayHeading(date: LocalDate, today: LocalDate): String = when (date) {
+    today -> stringResource(R.string.today_divider_today, dayLabel(date))
+    today.minusDays(1) -> stringResource(R.string.today_divider_yesterday, dayLabel(date))
+    else -> dayLabel(date)
+}
 
 /** "10月3日" / "Oct 3": a day without its weekday. */
 internal fun shortDate(d: LocalDate): String = localDate(d, "MMMd")
@@ -830,11 +733,7 @@ private fun DayDivider(
     mood: com.openminis.app.data.murmur.MoodTier? = null,
     onMood: () -> Unit = {},
 ) {
-    val day = when (date) {
-        today -> stringResource(R.string.today_divider_today, dayLabel(date))
-        today.minusDays(1) -> stringResource(R.string.today_divider_yesterday, dayLabel(date))
-        else -> dayLabel(date)
-    }
+    val day = dayHeading(date, today)
     // The page header of a diary: "10月12日周一 · 🌦 小雨 18–23°" (SPEC §15.4).
     val label = if (weather == null) day else
         "$day · " + weather.summary(stringResource(com.openminis.app.data.journal.TodayWeather.label(weather.code)))
@@ -1551,45 +1450,4 @@ private fun VideoPage(video: CameraPhoto, active: Boolean) {
             Text(VideoThumb.duration(duration.toLong()), color = Color.White, fontSize = 11.sp)
         }
     }
-}
-
-/** "Included albums" (SPEC §5.1): camera folders are always in; others opt in. */
-@Composable
-private fun AlbumsDialog(vm: TodayViewModel, selected: Set<String>, onDone: (Set<String>) -> Unit) {
-    var albums by remember { mutableStateOf<List<CameraRollSource.Album>?>(null) }
-    var picked by remember { mutableStateOf(selected) }
-    LaunchedEffect(Unit) { albums = vm.albums() }
-    AlertDialog(
-        onDismissRequest = { onDone(picked) },
-        title = { Text(stringResource(R.string.today_settings_albums)) },
-        text = {
-            Column {
-                Text(stringResource(R.string.today_albums_body), fontSize = 13.sp)
-                Spacer(Modifier.height(8.dp))
-                val list = albums
-                if (list == null) {
-                    CircularProgressIndicator(Modifier.padding(16.dp))
-                } else {
-                    LazyColumn(Modifier.heightIn(max = 360.dp)) {
-                        items(list, key = { it.bucketId }) { a ->
-                            val always = CameraRollRules.classify(a.relativeDir, null, emptySet()) != null
-                            Row(
-                                Modifier.fillMaxWidth().clickable(enabled = !always) {
-                                    picked = if (a.bucketId in picked) picked - a.bucketId else picked + a.bucketId
-                                },
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Checkbox(checked = always || a.bucketId in picked, onCheckedChange = null, enabled = !always)
-                                Column(Modifier.padding(start = 8.dp)) {
-                                    Text(a.name)
-                                    Text("${a.relativeDir} · ${a.count}", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = { TextButton(onClick = { onDone(picked) }) { Text(stringResource(R.string.today_done)) } },
-    )
 }

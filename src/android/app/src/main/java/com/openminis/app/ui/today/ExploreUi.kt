@@ -38,7 +38,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
@@ -46,6 +45,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -64,7 +67,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -79,7 +81,10 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.openminis.app.R
 import com.openminis.app.data.photos.CameraPhoto
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneId
 import java.util.Locale
 
@@ -98,7 +103,13 @@ private sealed interface Sheet {
     data class Day(val page: ExplorePage) : Sheet
     /** 心愿单 in full. */
     data object Wishes : Sheet
+    data object Mood : Sheet
+    data object Suggestions : Sheet
+    data object Settings : Sheet
 }
+
+/** The 心情 and 智能建议 tiles, when the 碎碎念 model is on this phone. */
+private data class MurmurTiles(val suggestOn: Boolean, val suggestToday: Int)
 
 /** The colour of wishes: something still ahead. */
 private val Wishful = Color(0xFF8E7CC3)
@@ -108,6 +119,7 @@ private val WishfulSoft = Color(0x268E7CC3)
 @Composable
 fun ExploreScreen(
     onAskMinis: (text: String, photoUris: List<String>) -> Unit,
+    onOpenChat: (sessionId: String) -> Unit,
     modifier: Modifier = Modifier,
     // Today's: the nature collection and 我的菜单 open on it, and 探索 reads from it.
     today: TodayViewModel = viewModel(),
@@ -116,6 +128,10 @@ fun ExploreScreen(
     val zone = ZoneId.systemDefault()
     val data by vm.data.collectAsState()
     val page by vm.page.collectAsState()
+    // Only what the tiles need from Today's state: 探索 is not redrawn with every timeline change.
+    val murmurTiles by remember(today) {
+        today.state.map { if (it.murmurReady) MurmurTiles(it.smartSuggest, it.murmurSuggestions.size) else null }.distinctUntilChanged()
+    }.collectAsState(null)
     // Saved with the tab (AppNavigation keeps each tab's saved state), so coming back finds the same place.
     val listState = rememberLazyListState()
     var sheet by remember { mutableStateOf<Sheet?>(null) }
@@ -125,6 +141,10 @@ fun ExploreScreen(
     // Ticking a wish off or letting it go happens at once, with a moment to take it back.
     val onWish = rememberWishSetter(snackbar, vm::setWish)
     val askWish: (Wish) -> Unit = { w -> sheet = null; onAskMinis(context.getString(R.string.explore_wish_ask_prompt, w.text), emptyList()) }
+
+    // The last week's faces, read again with [data] — rebuilt (debounced) on tag and journal changes.
+    var moods by remember { mutableStateOf<List<MoodDay>?>(null) }
+    LaunchedEffect(murmurTiles != null, data) { if (murmurTiles != null) moods = today.recentMoods(7) }
 
     // Back on 探索 goes to Today first, like any tab beside the home one.
     // Composed after the NavHost and AppNavigation's own, so it is asked first.
@@ -142,10 +162,17 @@ fun ExploreScreen(
     Surface(modifier = modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
       Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().statusBarsPadding()) {
-            Row(Modifier.fillMaxWidth().padding(start = 18.dp, end = 18.dp, top = 12.dp, bottom = 6.dp), verticalAlignment = Alignment.Bottom) {
+            Row(Modifier.fillMaxWidth().padding(start = 18.dp, end = 6.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(stringResource(R.string.tab_explore), fontSize = 22.sp, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.width(10.dp))
-                Text(stringResource(R.string.explore_tagline), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp, modifier = Modifier.padding(bottom = 3.dp))
+                Text(
+                    stringResource(R.string.explore_tagline), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
+                )
+                // 今日 and 探索's settings, on a page of their own.
+                IconButton(onClick = { sheet = Sheet.Settings }) {
+                    Icon(Icons.Outlined.Settings, contentDescription = stringResource(R.string.today_settings_title))
+                }
             }
             // Only the very first time is there anything to wait for: the page's
             // shapes hold still, then everything fades in at once.
@@ -162,6 +189,8 @@ fun ExploreScreen(
                     onPage = vm::turnTo,
                     listState = listState,
                     zone = zone,
+                    murmur = murmurTiles,
+                    moods = moods,
                     onSheet = { sheet = it },
                     onPhoto = { list, i -> viewer = list to i },
                     onWish = onWish,
@@ -182,6 +211,9 @@ fun ExploreScreen(
         is Sheet.Dishes -> DishesPage(today, focus = sh.focus, initial = data?.food, onDismiss = { sheet = null })
         is Sheet.Day -> DayPage(vm, sh.page, zone, onPhoto = { list, i -> viewer = list to i }, onDismiss = { sheet = null })
         Sheet.Wishes -> WishesPage(data?.wishes.orEmpty(), vm::setWish, onAsk = askWish, onDismiss = { sheet = null })
+        Sheet.Mood -> MoodPage(today, LocalDate.now(zone), onDismiss = { sheet = null })
+        Sheet.Suggestions -> SuggestionsPage(today, onOpenChat, onSettings = { sheet = Sheet.Settings }, onDismiss = { sheet = null })
+        Sheet.Settings -> TodaySettingsPage(today, onDismiss = { sheet = null })
         null -> Unit
     }
     // After the day page, so a photo opened from it shows above it.
@@ -195,6 +227,8 @@ private fun ExploreContent(
     onPage: (Int) -> Unit,
     listState: LazyListState,
     zone: ZoneId,
+    murmur: MurmurTiles?,
+    moods: List<MoodDay>?,
     onSheet: (Sheet) -> Unit,
     onPhoto: (List<CameraPhoto>, Int) -> Unit,
     onWish: (Wish, String) -> Unit,
@@ -235,6 +269,20 @@ private fun ExploreContent(
                 } else {
                     Spacer(Modifier.weight(1f))
                 }
+            }
+        }
+        // What the 碎碎念 model reads from the murmurs (§19.2, §19.3): only when it is on this phone.
+        if (murmur != null) {
+            item(key = "mood") { MoodWeek(moods, Modifier.padding(top = 12.dp)) { onSheet(Sheet.Mood) } }
+            item(key = "suggest") {
+                SuggestRow(
+                    when {
+                        !murmur.suggestOn -> stringResource(R.string.explore_suggest_off)
+                        murmur.suggestToday > 0 -> stringResource(R.string.explore_suggest_today, murmur.suggestToday)
+                        else -> stringResource(R.string.explore_suggest_recent)
+                    },
+                    Modifier.padding(top = 10.dp),
+                ) { onSheet(Sheet.Suggestions) }
             }
         }
         val open = d.wishes.filter { it.open }
@@ -427,45 +475,80 @@ private fun Tile(title: String, sub: String, cover: CameraPhoto?, emoji: String,
     }
 }
 
+/** The last seven days as faces (§19.2), today last; a day without one keeps a faint dot. Tap for the month. */
+@Composable
+private fun MoodWeek(days: List<MoodDay>?, modifier: Modifier, onClick: () -> Unit) {
+    val sub = MaterialTheme.colorScheme.onSurfaceVariant
+    val locale = Locale.getDefault()
+    Column(modifier.fillMaxWidth().pressable(onClick).clip(RoundedCornerShape(18.dp)).background(GoldSoft).padding(horizontal = 16.dp, vertical = 14.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(stringResource(R.string.today_mood_title), fontSize = 15.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+            Text(stringResource(R.string.explore_mood_sub) + " ›", fontSize = 12.sp, color = sub)
+        }
+        Row(Modifier.fillMaxWidth().padding(top = 10.dp)) {
+            for (d in days.orEmpty()) {
+                Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Box(Modifier.size(28.dp), contentAlignment = Alignment.Center) {
+                        val w = d.word()
+                        if (w != null) Text(moodEmoji(w), fontSize = 20.sp)
+                        else Box(Modifier.size(5.dp).clip(CircleShape).background(sub.copy(alpha = 0.3f)))
+                    }
+                    Text(
+                        d.date.dayOfWeek.getDisplayName(java.time.format.TextStyle.NARROW, locale),
+                        fontSize = 11.sp, color = sub.copy(alpha = 0.8f), modifier = Modifier.padding(top = 2.dp),
+                    )
+                }
+            }
+            // Same height while the week is read.
+            if (days == null) Spacer(Modifier.height(46.dp))
+        }
+    }
+}
+
+/** 智能建议 as one quiet line: what is there, and the way in. */
+@Composable
+private fun SuggestRow(sub: String, modifier: Modifier, onClick: () -> Unit) {
+    Row(
+        modifier.fillMaxWidth().pressable(onClick).clip(RoundedCornerShape(18.dp))
+            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)).padding(horizontal = 16.dp, vertical = 13.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("💬", fontSize = 16.sp)
+        Text(stringResource(R.string.today_suggest_page_title), fontSize = 15.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 10.dp).weight(1f))
+        Text("$sub ›", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
 @Composable
 private fun SectionTitle(text: String, modifier: Modifier = Modifier) =
     Text(text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, modifier = modifier.padding(top = 26.dp, bottom = 10.dp))
 
-/** Firsts as a strip of small cards: the photo from that first time, the name, and when. */
+/** Firsts, three at most, side by side: the photo from that first time, the name, and when. */
 @Composable
 private fun FirstsStrip(firsts: List<ExploreFirst>, photos: Map<String, CameraPhoto>, zone: ZoneId, onOpen: (ExploreFirst) -> Unit) {
-    LazyRow(
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        // Bleed to the screen edges while the cards line up with the page.
-        contentPadding = PaddingValues(horizontal = 20.dp),
-        modifier = Modifier.fillMaxWidth().layout { m, c ->
-            val extra = 40.dp.roundToPx()
-            val p = m.measure(c.copy(maxWidth = c.maxWidth + extra))
-            layout(c.maxWidth, p.height) { p.place(-extra / 2, 0) }
-        },
-    ) {
-        items(firsts, key = { "${it.species}:${it.key}" }) { f ->
-            Column(Modifier.width(118.dp).pressable { onOpen(f) }) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        for (f in firsts) {
+            Column(Modifier.weight(1f).pressable { onOpen(f) }) {
                 Box(
-                    Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(16.dp))
+                    Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(14.dp))
                         .background(if (f.species) LeafSoft else KitchenSoft),
                     contentAlignment = Alignment.Center,
                 ) {
                     val ph = f.photo?.let(photos::get)
-                    if (ph != null) PhotoImage(ph, Modifier.fillMaxSize(), size = 360)
-                    else Text(if (f.species) "🌿" else "🍳", fontSize = 30.sp)
+                    if (ph != null) PhotoImage(ph, Modifier.fillMaxSize(), size = 300)
+                    else Text(if (f.species) "🌿" else "🍳", fontSize = 26.sp)
                 }
-                Spacer(Modifier.height(8.dp))
-                Text(f.name, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Spacer(Modifier.height(6.dp))
+                Text(f.name, fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(
-                    stringResource(if (f.species) R.string.explore_first_saw else R.string.explore_first_written) + " · " +
-                        shortDate(Instant.ofEpochMilli(f.atMs).atZone(zone).toLocalDate()),
+                    shortDate(Instant.ofEpochMilli(f.atMs).atZone(zone).toLocalDate()),
                     fontSize = 11.sp,
                     color = if (f.species) Leaf else Kitchen,
                     maxLines = 1,
                 )
             }
         }
+        repeat(3 - firsts.size) { Spacer(Modifier.weight(1f)) }
     }
 }
 
@@ -481,20 +564,17 @@ private fun FactsGrid(f: ExploreFacts) {
         shortDate(f.busiestDay) to stringResource(R.string.explore_fact_busiest, f.busiestCount),
         f.photos.toString() to stringResource(R.string.explore_fact_photos),
     )
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        for (row in cells.chunked(2)) {
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                for ((value, label) in row) {
-                    Column(
-                        Modifier.weight(1f).clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.surfaceContainerLow)
-                            .padding(horizontal = 14.dp, vertical = 12.dp),
-                    ) {
-                        Text(value, fontSize = 22.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
-                        Spacer(Modifier.height(2.dp))
-                        Text(label, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, lineHeight = 16.sp)
-                    }
-                }
-                if (row.size == 1) Spacer(Modifier.weight(1f))
+    // Two a day, a different pair tomorrow: a finding, not a dashboard.
+    val shown = remember(cells) { cells.shuffled(java.util.Random(LocalDate.now().toEpochDay())).take(2) }
+    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        for ((value, label) in shown) {
+            Column(
+                Modifier.weight(1f).clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.surfaceContainerLow)
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+            ) {
+                Text(value, fontSize = 22.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                Spacer(Modifier.height(2.dp))
+                Text(label, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, lineHeight = 16.sp)
             }
         }
     }

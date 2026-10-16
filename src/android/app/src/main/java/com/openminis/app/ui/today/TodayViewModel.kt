@@ -239,10 +239,17 @@ class TodayViewModel(app: Application) : AndroidViewModel(app), ExploreSources {
     fun speciesSeen(paths: Collection<String>) = _freshSpecies.update { it - paths.toSet() }
 
     /** "不用" under a murmur; returns an undo (null if there was nothing to change). */
-    fun dismissMurmurSuggestion(note: TodayNote): (() -> Unit)? = murmur.dismiss(note)?.let { prev -> { murmur.restore(note, prev) } }
+    fun dismissMurmurSuggestion(id: String, body: String): (() -> Unit)? =
+        murmur.dismiss(id, body)?.let { prev -> { murmur.restore(id, body, prev) } }
 
     /** Tapped a suggestion: its chat joins the session list; returns its id to open (§19.3). */
-    suspend fun openMurmurChat(note: TodayNote): String? = murmur.open(note)
+    suspend fun openMurmurChat(id: String, body: String): String? = murmur.open(id, body)
+
+    /** The 智能建议 page (§19.3): the last days' prepared chats. */
+    suspend fun murmurSuggestionList(): List<SuggestionItem> = murmur.suggestionList()
+
+    /** Goes up whenever a suggestion is written: the 智能建议 page reads again. */
+    val murmurChanges: StateFlow<Int> = com.openminis.app.data.murmur.MurmurIndex.get(app).suggestionChanges
     override suspend fun foodNotes(days: List<Pair<LocalDate, List<com.openminis.app.data.journal.JournalEntry>>>?): List<FoodNote> =
         murmur.foodNotes(days)
 
@@ -256,6 +263,7 @@ class TodayViewModel(app: Application) : AndroidViewModel(app), ExploreSources {
     fun moodHintDue(): Boolean = !murmur.moodHintShown
     fun moodHintSeen() { murmur.moodHintShown = true }
     suspend fun moodMonth(ym: java.time.YearMonth): List<MoodDay> = murmur.month(ym)
+    suspend fun recentMoods(n: Int): List<MoodDay> = murmur.recentMoods(n)
     suspend fun tagMoodBacklog(onEach: () -> Unit) = murmur.tagMonthBacklog(onEach)
     fun setNoteMood(date: LocalDate, id: String, word: String) { viewModelScope.launch { murmur.setMood(date, id, word) } }
     suspend fun setNoteMoodNow(date: LocalDate, id: String, word: String) = murmur.setMood(date, id, word)

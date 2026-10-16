@@ -1205,7 +1205,7 @@ internal fun NatureCollectionPage(vm: TodayViewModel, open: String?, onAsk: (Str
                     l == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         CircularProgressIndicator(color = Leaf, strokeWidth = 2.dp, modifier = Modifier.size(28.dp))
                     }
-                    l.isEmpty() -> EmptyCollection()
+                    l.isEmpty() -> TodayEmpty("🌿", stringResource(R.string.today_species_empty))
                     else -> {
                         val groups = l.groupingBy { it.group ?: "" }.eachCount().entries.sortedByDescending { it.value }
                         val shown = if (filter == null) l else l.filter { (it.group ?: "") == filter }
@@ -1355,15 +1355,6 @@ private fun SpeciesCard(c: CollectedSpecies, selected: Boolean?, onClick: () -> 
                 contentAlignment = Alignment.Center,
             ) { if (selected) Icon(Icons.Filled.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp)) }
         }
-    }
-}
-
-@Composable
-private fun EmptyCollection() {
-    Column(Modifier.fillMaxSize().padding(40.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-        Text("🌿", fontSize = 56.sp)
-        Spacer(Modifier.height(16.dp))
-        Text(stringResource(R.string.today_species_empty), fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, lineHeight = 22.sp)
     }
 }
 

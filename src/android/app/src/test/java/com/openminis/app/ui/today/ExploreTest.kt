@@ -72,7 +72,7 @@ class ExploreTest {
             FoodNote("f2", d, ms(1), "又做了宫保鸡丁", emptyList(), listOf("宫保鸡丁")),
             FoodNote("f3", d, ms(2), "吃了牛肉面", emptyList(), listOf("牛肉面")),
         )
-        val f = Explore.firsts(species, food)
+        val f = Explore.firsts(species, food, perKind = 4, limit = 10)
         // Each dish once, from the first murmur naming it.
         assertEquals(listOf("种6", "种5", "种4", "种3", "牛肉面", "宫保鸡丁"), f.map { it.name })
         assertEquals("DCIM/a.jpg", f.last().photo)

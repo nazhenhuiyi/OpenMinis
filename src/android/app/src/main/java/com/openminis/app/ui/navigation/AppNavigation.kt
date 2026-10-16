@@ -1656,7 +1656,7 @@ fun AppNavigation(
             com.openminis.app.ui.today.TodayScreen(onAskMinis = askMinis, onOpenChat = openChat, modifier = Modifier.fillMaxSize())
         }
         com.openminis.app.ui.today.MainTabs.Tab.EXPLORE -> tabStates.SaveableStateProvider("explore") {
-            com.openminis.app.ui.today.ExploreScreen(onAskMinis = askMinis, modifier = Modifier.fillMaxSize())
+            com.openminis.app.ui.today.ExploreScreen(onAskMinis = askMinis, onOpenChat = openChat, modifier = Modifier.fillMaxSize())
         }
         com.openminis.app.ui.today.MainTabs.Tab.CHAT -> Unit
     }

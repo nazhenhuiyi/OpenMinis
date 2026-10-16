@@ -1,5 +1,6 @@
 package com.openminis.app.data.murmur
 
+import java.time.LocalDate
 import android.content.Context
 import com.openminis.app.MinisApp
 import com.openminis.app.data.db.ChatSessionEntity
@@ -187,9 +188,10 @@ object MurmurAgent {
     }
 
     /**
-     * Cold start: murmur chats never opened and untouched for two days, wherever
-     * they were left (a run killed between creating the chat and recording it,
-     * Today not opened since). Today clears its own recorded ones sooner.
+     * Cold start: murmur chats never opened and older than the 智能建议 page
+     * keeps them, wherever they were left (a run killed between creating the
+     * chat and recording it, Today not opened since). The queue clears its own
+     * recorded ones day by day.
      */
     suspend fun sweep(context: Context) {
         val app = context.applicationContext as? MinisApp ?: return
@@ -199,7 +201,13 @@ object MurmurAgent {
         if (stale.isNotEmpty()) AppLogger.info(TAG, "swept ${stale.size} unopened chat(s)")
     }
 
-    private const val SWEEP_AFTER_MS = 2 * 24 * 60 * 60 * 1000L
+    /** Days a chat prepared and never opened is kept: what the 智能建议 page lists. */
+    const val KEEP_DAYS = 7L
+
+    /** Made within the last [KEEP_DAYS] days (by the day it was made): listed, and not yet cleared. */
+    fun isRecent(s: MurmurSuggestion, zone: ZoneId = ZoneId.systemDefault()): Boolean =
+        !Instant.ofEpochMilli(s.createdMs).atZone(zone).toLocalDate().isBefore(LocalDate.now(zone).minusDays(KEEP_DAYS - 1))
+    private const val SWEEP_AFTER_MS = (KEEP_DAYS + 1) * 24 * 60 * 60 * 1000L
 
     /** Never opened: gone, with its messages (a run still going is stopped first). */
     suspend fun discard(context: Context, sessionId: String) {

@@ -32,6 +32,10 @@ class MurmurIndex private constructor(context: Context) {
     /** Goes up each time a murmur's tags are written (探索 rebuilds on it, §20). */
     val tagChanges: kotlinx.coroutines.flow.StateFlow<Int> = _tagChanges
 
+    private val _suggestionChanges = kotlinx.coroutines.flow.MutableStateFlow(0)
+    /** Goes up each time a suggestion is written: stored, opened, turned down or cleared (the 智能建议 page reads again). */
+    val suggestionChanges: kotlinx.coroutines.flow.StateFlow<Int> = _suggestionChanges
+
     init {
         read(tagsFile)?.let { o ->
             for (id in o.keys()) {
@@ -98,6 +102,7 @@ class MurmurIndex private constructor(context: Context) {
     @Synchronized fun putSuggestions(changed: Map<String, MurmurSuggestion>) {
         if (changed.isEmpty()) return
         suggestions.putAll(changed)
+        _suggestionChanges.value++
         write(suggestionsFile, JSONObject().apply { for ((k, v) in suggestions) put(k, v.toJson()) })
     }
 
@@ -139,6 +144,9 @@ data class MurmurSuggestion(
     /** The brief it was judged with ([MurmurAgent.BRIEF_VERSION]); 0 = before versions. */
     val promptVersion: Int = 0,
 ) {
+    /** Its chat is still there for the user: offered, or opened. */
+    val isLive: Boolean get() = sessionId.isNotBlank() && (state == OFFER || state == OPENED)
+
     fun toJson() = JSONObject().apply {
         put("h", hash); put("s", state); put("title", title); put("pre", preview); put("sid", sessionId)
         put("c", createdMs); put("pv", promptVersion)

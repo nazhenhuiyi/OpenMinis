@@ -163,9 +163,9 @@ object Explore {
     /**
      * Each kind's first sighting and the first murmur naming each dish, newest
      * first — at most [perKind] of each, so a busy month of plants does not
-     * hide the table.
+     * hide the table, and [limit] in all.
      */
-    fun firsts(species: List<CollectedSpecies>, food: List<FoodNote>, perKind: Int = 4): List<ExploreFirst> {
+    fun firsts(species: List<CollectedSpecies>, food: List<FoodNote>, perKind: Int = 2, limit: Int = 3): List<ExploreFirst> {
         val first = HashMap<String, FoodNote>()
         for (f in food) for (dish in f.dishes) {
             if (f.atMs < (first[dish]?.atMs ?: Long.MAX_VALUE)) first[dish] = f
@@ -174,7 +174,7 @@ object Explore {
             .sortedByDescending { it.atMs }.take(perKind)
         val dishes = first.map { (dish, f) -> ExploreFirst(false, dish, f.atMs, dish, f.photos.firstOrNull(), f.id) }
             .sortedByDescending { it.atMs }.take(perKind)
-        return (kinds + dishes).sortedByDescending { it.atMs }
+        return (kinds + dishes).sortedByDescending { it.atMs }.take(limit)
     }
 }
 
