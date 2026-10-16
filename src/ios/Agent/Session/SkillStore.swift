@@ -1379,7 +1379,7 @@ Do not create extraneous files: README.md, INSTALLATION_GUIDE.md, CHANGELOG.md, 
         xml += "</available_skills>"
 
         var fragment = "Skills:\n"
-        fragment += "Reusable instruction sets stored at /var/minis/skills/<name>/SKILL.md. Read the SKILL.md file to load full instructions before using a skill.\n\n"
+        fragment += "Reusable instruction sets stored at /var/minis/skills/<name>/SKILL.md. When the user's request matches a skill's description, read that SKILL.md and follow it before answering; don't skip it because you think you can answer without it.\n\n"
         fragment += xml
 
         if hasMore {
