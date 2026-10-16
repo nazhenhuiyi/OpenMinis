@@ -2275,7 +2275,6 @@
     <string name="today_nature_know">認識牠</string>
     <string name="today_nature_genus_note">牠自己還沒有條目，下面是牠所在的屬：</string>
     <string name="today_nature_wiki_source">來自維基百科 · 閱讀全文</string>
-    <string name="today_nature_wiki_loading">正在取得介紹…</string>
     <string name="today_nature_wiki_none">維基百科上還沒有牠的介紹。</string>
     <string name="today_nature_when">什麼時候能見到</string>
     <string name="today_nature_when_peak">%1$s 最常見 · 中國的 iNaturalist 上共 %2$d 筆觀察</string>

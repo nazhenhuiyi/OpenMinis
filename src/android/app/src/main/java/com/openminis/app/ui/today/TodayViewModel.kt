@@ -831,11 +831,8 @@ class TodayViewModel(app: Application) : AndroidViewModel(app), ExploreSources {
     /** Names, how common, ranks above and look-alikes — all from the species list, offline. */
     suspend fun speciesProfile(latin: String): SpeciesId.Profile? = SpeciesId.profile(context, latin)
 
-    /** Wikipedia summary and month-by-month sightings; the cached copy first, then a refresh if due. */
-    suspend fun speciesInfoCached(latin: String): com.openminis.app.data.species.SpeciesInfo.Info? =
-        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { com.openminis.app.data.species.SpeciesInfo.cached(context, latin) }
-
-    suspend fun speciesInfo(t: SpeciesId.Taxon): com.openminis.app.data.species.SpeciesInfo.Info? =
+    /** Wikipedia summary and month-by-month sightings, from the files beside the model. */
+    suspend fun speciesInfo(t: SpeciesId.Taxon): com.openminis.app.data.species.SpeciesInfo.Info =
         com.openminis.app.data.species.SpeciesInfo.get(context, t)
 
     /** What a kind looks like (openly licensed iNaturalist photos), for the candidates in "Identify" (§17.3). */

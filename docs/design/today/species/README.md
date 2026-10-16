@@ -1,6 +1,6 @@
 # 识别模型和物种名单的生成脚本（SPEC §17）
 
-产物（都不进仓库，体积太大；发布在 GitHub Release [`species-model-v1`](https://github.com/nazhenhuiyi/OpenMinis/releases/tag/species-model-v1)，说明里有 SHA-256。更新时发新的 release）：`bioclip2_img_w8a16.onnx` + `.data`（骁龙 NPU；App 只用 NPU）、`species.bin`、`species.tsv`、`species_prior.bin`（可选）。中间数据都在 `/tmp/bc-data/`。
+产物（都不进仓库，体积太大；发布在 GitHub Release [`species-model-v2`](https://github.com/nazhenhuiyi/OpenMinis/releases/tag/species-model-v2)，说明里有 SHA-256。更新时发新的 release）：`bioclip2_img_w8a16.onnx` + `.data`（骁龙 NPU；App 只用 NPU）、`species.bin`、`species.tsv`、`species_prior.bin`（可选）、`species_wiki.{zh-cn,zh-tw,en}.tsv`（图鉴页的维基摘要，可选）。中间数据都在 `/tmp/bc-data/`。
 
 环境：Python 3 + `pip install pybioclip onnx onnxruntime onnxscript`（`export.py`、`quant.py`、`qdq.py`、`fill.py`、`sim.py` 用这个环境；抓数据的脚本只用标准库）。
 
@@ -22,6 +22,7 @@
 | 11 | `provinces.py` | 34 个省级行政区的 iNat place id → `provinces.json`（顺序就是 App 里 `PROVINCES` 的顺序） |
 | 12 | `geo_months.py` | 每个省有记录的物种、全国每个月的观察数（iNat，限速，可断点续跑；约 1 小时） |
 | 13 | `build_prior.py` | → `species_prior.bin`（按省有没有 + 按月的季节分布，和 `species.tsv` 逐行对应）。记录太少（< 2000 种）或被截断在 2 万种上限的省份不判"没有" |
+| 14 | `wiki.py` | → `species_wiki.<语言>.tsv`：每个物种和属的维基百科导语第一段（简 / 繁 / 英），每行 `学名 \t 标题 \t 摘要`。先按学名查 Wikidata 的条目，再按中文名 / 学名当标题查；同名的几个条目要核对中文名。中文用 OpenCC 统一成简体或繁体（要 `pip install opencc`），去掉模板留下的空括号。批量 20 篇一次，回应缓存在 `/tmp/bc-data/wiki/`，可断点续跑 |
 
 `PhoneBench.kt`：测速用的独立小 App（instrumentation，锁屏也能跑），比较 CPU / NNAPI / QNN 和内存选项。
 

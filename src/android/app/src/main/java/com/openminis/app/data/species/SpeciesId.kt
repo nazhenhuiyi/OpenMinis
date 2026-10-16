@@ -543,6 +543,28 @@ object SpeciesId {
     }
 
     /**
+     * When [latin] is about, from species_prior.bin: each month's share of its
+     * sightings (of the busiest, 0–255, lightly smoothed), January first;
+     * null without month data. Just its row, without loading the rest.
+     */
+    suspend fun months(context: Context, latin: String): List<Int>? = withContext(Dispatchers.IO) {
+        val t = taxa(context) ?: return@withContext null
+        val row = t.byLatin[latin]?.let { t.list.indexOf(it) }?.takeIf { it >= 0 } ?: return@withContext null
+        val f = File(dir(context) ?: return@withContext null, PRIOR).takeIf { it.isFile } ?: return@withContext null
+        runCatching {
+            RandomAccessFile(f, "r").use { raf ->
+                val h = ByteBuffer.allocate(12).order(ByteOrder.LITTLE_ENDIAN)
+                raf.readFully(h.array())
+                check(h.int == 0x31495250) { "bad species_prior.bin" } // "PRI1"
+                val n = h.int
+                check(n == t.list.size) { "species_prior.bin does not match species.tsv" }
+                raf.seek(12L + n.toLong() * h.int + row * 12L)
+                ByteArray(12).also { raf.readFully(it) }.map { it.toInt() and 0xFF }.takeIf { m -> m.any { it > 0 } }
+            }
+        }.onFailure { AppLogger.warning(TAG, "months: ${it.message}") }.getOrNull()
+    }
+
+    /**
      * Load the encoder ahead of time, so the one-off NPU compile happens
      * before anyone waits on it. Once compiled there is nothing to gain: the
      * cache loads in a fraction of a second when a photo needs it, so the NPU

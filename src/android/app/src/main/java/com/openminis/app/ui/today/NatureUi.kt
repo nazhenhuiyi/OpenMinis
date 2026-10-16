@@ -623,14 +623,7 @@ internal fun WhatIsItPage(
     val refs by produceState(emptyList<SpeciesInfo.RefPhoto>(), s.latin, taxon) {
         taxon?.let { value = vm.refPhotos(s.latin, if (s.genus) null else it.inatId) }
     }
-    var info by remember(s.latin) { mutableStateOf<SpeciesInfo.Info?>(null) }
-    var infoDone by remember(s.latin) { mutableStateOf(false) }
-    LaunchedEffect(taxon) {
-        val t = taxon ?: return@LaunchedEffect
-        info = vm.speciesInfoCached(s.latin)
-        vm.speciesInfo(t)?.let { info = it }
-        infoDone = true
-    }
+    val info by produceState<SpeciesInfo.Info?>(null, taxon) { taxon?.let { value = vm.speciesInfo(it) } }
     val name = if (s.genus) genusPhrase(s.name) else s.name
     val already = recorded?.latin == s.latin
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
@@ -701,7 +694,7 @@ internal fun WhatIsItPage(
                         profile?.taxon?.count?.takeIf { it > 0 }?.let { Tag(commonness(it)) }
                     }
                     Section(stringResource(R.string.today_nature_know))
-                    AboutCard(info, infoDone)
+                    AboutCard(info)
                     refs.firstOrNull()?.let {
                         Text(stringResource(R.string.today_identify_ref_credit, it.attribution), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 10.dp))
                     }
@@ -1378,15 +1371,7 @@ private fun SpeciesPage(
     val whenFmt = DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM, FormatStyle.SHORT)
     BackHandler(onBack = onBack)
     val profile by produceState<SpeciesId.Profile?>(null, c.latin) { value = vm.speciesProfile(c.latin) }
-    // The kept copy at once; the network only fills in what is missing or stale.
-    var info by remember(c.latin) { mutableStateOf<SpeciesInfo.Info?>(null) }
-    var infoDone by remember(c.latin) { mutableStateOf(false) }
-    LaunchedEffect(c.latin) { if (info == null) info = vm.speciesInfoCached(c.latin) }
-    LaunchedEffect(profile) {
-        val t = profile?.taxon ?: return@LaunchedEffect
-        vm.speciesInfo(t)?.let { info = it }
-        infoDone = true
-    }
+    val info by produceState<SpeciesInfo.Info?>(null, profile) { profile?.taxon?.let { value = vm.speciesInfo(it) } }
     val firstPlace by produceState(c.first.place, c.latin) {
         if (value == null) value = c.first.photos.firstOrNull()?.let { vm.placeOf(it) }
     }
@@ -1460,17 +1445,17 @@ private fun SpeciesPage(
 
                 // ── About it (Wikipedia) ──
                 Section(stringResource(R.string.today_nature_know))
-                AboutCard(info, infoDone)
+                AboutCard(info)
 
                 // ── When to see it ──
-                info?.months?.takeIf { m -> m.sum() > 0 }?.let { months ->
+                info?.months?.let { months ->
                     Section(stringResource(R.string.today_nature_when))
                     MonthChart(months, myMonths)
                     Spacer(Modifier.height(8.dp))
                     val peak = months.indices.filter { months[it] >= months.max() * 0.85 }
                         .let { ms -> monthNames(ms.map { it + 1 }) }
                     Text(
-                        stringResource(R.string.today_nature_when_peak, peak, months.sum()),
+                        stringResource(R.string.today_nature_when_peak, peak, info?.sightings ?: 0),
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -1573,14 +1558,15 @@ private fun Section(title: String) {
 
 /** The Wikipedia summary, five lines until tapped, with its source. */
 @Composable
-private fun AboutCard(info: SpeciesInfo.Info?, done: Boolean) {
+private fun AboutCard(info: SpeciesInfo.Info?) {
     val openUrl = LocalInAppBrowserLauncher.current
     var open by remember { mutableStateOf(false) }
     Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceContainerLow, modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.clickable { open = !open }.padding(14.dp)) {
             val text = info?.summary
             when {
-                text == null && !done -> Text(stringResource(R.string.today_nature_wiki_loading), fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                // Read from a local file in a moment: nothing to say meanwhile.
+                info == null -> Unit
                 text == null -> Text(stringResource(R.string.today_nature_wiki_none), fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 else -> {
                     if (info.aboutGenus) {

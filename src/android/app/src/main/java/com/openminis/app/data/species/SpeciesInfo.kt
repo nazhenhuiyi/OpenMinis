@@ -16,21 +16,19 @@ import java.util.concurrent.TimeUnit
 
 /**
  * [T-today-species] What the species page shows about a kind beyond the
- * user's own photos (SPEC §17.4), fetched once and kept:
- * - a Wikipedia summary, in the user's language, found by the scientific
- *   name (a Chinese common name can land on the wrong article);
- * - how many iNaturalist sightings in China fall in each month, i.e. when
- *   it is about.
+ * user's own photos (SPEC §17.4), all from the files beside the model — no
+ * network, so it works where Wikipedia can't be reached:
+ * - the lead of its Wikipedia article in the user's language, else its
+ *   genus' (species_wiki.<lang>.tsv, made by docs/design/today/species/wiki.py);
+ * - when it is about: its iNaturalist sightings in China by month, from
+ *   species_prior.bin, and how many there are in all (species.tsv).
  *
- * Only the scientific name and the iNaturalist id leave the phone — never a
- * photo or a place. Kept in filesDir/species-info/, refreshed after
- * [MAX_AGE_MS]; offline, the last copy is shown.
+ * Reference photos are still fetched from iNaturalist (only the scientific
+ * name and its id leave the phone — never a photo or a place).
  */
 object SpeciesInfo {
     private const val TAG = "SpeciesInfo"
-    private const val MAX_AGE_MS = 90L * 24 * 3600 * 1000
     private const val UA = "Minis/1.0 (Android; species info for the user's own nature collection)"
-    private const val CHINA = 6903
 
     data class Info(
         /** Plain-text summary, null if no article was found. */
@@ -38,15 +36,13 @@ object SpeciesInfo {
         val articleUrl: String?,
         /** The species has no article; [summary] is about its genus. */
         val aboutGenus: Boolean,
-        /** Sightings in China per month, January first; null if unknown. */
+        /** Share of its sightings in China per month (of the busiest, 0–255), January first; null if unknown. */
         val months: List<Int>?,
-        val fetchedAt: Long,
+        /** Its sightings in China, all months. */
+        val sightings: Int,
     )
 
     private val UNSAFE = Regex("[^A-Za-z0-9 ._-]")
-
-    private fun file(context: Context, latin: String) =
-        File(File(context.filesDir, "species-info"), latin.replace(UNSAFE, "_") + "." + lang() + ".json")
 
     /** Wikipedia edition and script for the current locale: zh-cn / zh-tw / en. */
     private fun lang(): String {
@@ -56,41 +52,46 @@ object SpeciesInfo {
         return if (trad) "zh-tw" else "zh-cn"
     }
 
-    /** The cached copy, without touching the network. */
-    fun cached(context: Context, latin: String): Info? = runCatching {
-        val o = JSONObject(file(context, latin).readText())
+    suspend fun get(context: Context, t: SpeciesId.Taxon): Info = withContext(Dispatchers.IO) {
+        val lang = lang()
+        val wiki = runCatching { article(context, t, lang) }.onFailure { AppLogger.warning(TAG, "wikipedia: ${it.message}") }.getOrNull()
         Info(
-            summary = o.optString("summary").ifBlank { null },
-            articleUrl = o.optString("url").ifBlank { null },
-            aboutGenus = o.optBoolean("genus"),
-            months = o.optJSONArray("months")?.let { a -> List(a.length()) { a.getInt(it) } },
-            fetchedAt = o.optLong("at"),
+            summary = wiki?.third,
+            articleUrl = wiki?.let { url(lang, it.second) },
+            aboutGenus = wiki != null && wiki.first != t.latin,
+            months = SpeciesId.months(context, t.latin),
+            sightings = t.count,
         )
-    }.getOrNull()
+    }
 
-    /** Cached if fresh, else fetched (keeping the old copy when the network fails). */
-    suspend fun get(context: Context, t: SpeciesId.Taxon): Info? = withContext(Dispatchers.IO) {
-        val latin = t.latin
-        val old = cached(context, latin)
-        // Fresh enough — unless it was kept before the months could be asked for (no iNat id then).
-        if (old != null && System.currentTimeMillis() - old.fetchedAt < MAX_AGE_MS && (old.months != null || t.inatId == null)) return@withContext old
-        val wiki = runCatching { article(t) }.onFailure { AppLogger.warning(TAG, "wikipedia: ${it.message}") }.getOrNull()
-        val months = t.inatId?.let { id -> runCatching { months(id) }.onFailure { AppLogger.warning(TAG, "inat: ${it.message}") }.getOrNull() }
-        if (wiki == null && months == null) return@withContext old
-        val info = Info(
-            summary = wiki?.summary ?: old?.summary,
-            articleUrl = wiki?.url ?: old?.articleUrl,
-            aboutGenus = wiki?.genus ?: old?.aboutGenus ?: false,
-            months = months ?: old?.months,
-            fetchedAt = System.currentTimeMillis(),
-        )
-        runCatching {
-            file(context, latin).also { it.parentFile?.mkdirs() }.writeText(
-                JSONObject().put("summary", info.summary ?: "").put("url", info.articleUrl ?: "").put("genus", info.aboutGenus)
-                    .put("months", info.months?.let { JSONArray(it) }).put("at", info.fetchedAt).toString(),
-            )
+    private fun article(context: Context, t: SpeciesId.Taxon, lang: String): Triple<String, String, String>? {
+        val f = SpeciesId.dir(context)?.let { File(it, "species_wiki.$lang.tsv") }?.takeIf { it.isFile } ?: return null
+        return article(f, t.latin, t.genusLatin.takeIf { ' ' in t.latin })
+    }
+
+    /**
+     * (key, title, lead) of [latin]'s own article, else [genus]' — a genus
+     * suggestion is its own key. Lines are `latin \t title \t lead`; one
+     * pass over the file finds both.
+     */
+    internal fun article(f: File, latin: String, genus: String?): Triple<String, String, String>? {
+        var ofGenus: Triple<String, String, String>? = null
+        f.useLines { lines ->
+            for (line in lines) {
+                val key = line.substringBefore('\t')
+                if (key != latin && key != genus) continue
+                val c = line.split('\t', limit = 3)
+                if (c.size < 3) continue
+                if (key == latin) return Triple(key, c[1], c[2])
+                ofGenus = Triple(key, c[1], c[2])
+            }
         }
-        info
+        return ofGenus
+    }
+
+    private fun url(lang: String, title: String): String {
+        val path = URLEncoder.encode(title.replace(' ', '_'), "UTF-8").replace("+", "%20")
+        return if (lang == "en") "https://en.m.wikipedia.org/wiki/$path" else "https://zh.m.wikipedia.org/$lang/$path"
     }
 
     // ── Reference photos ─────────────────────────────────────────────────
@@ -119,9 +120,9 @@ object SpeciesInfo {
         if (kept != null) return@withContext kept.also { refMemory[latin] = it }
         val fetched = runCatching {
             val taxon = if (inatId != null) {
-                JSONObject(fetch("https://api.inaturalist.org/v1/taxa/$inatId", null)).optJSONArray("results")?.optJSONObject(0)
+                JSONObject(fetch("https://api.inaturalist.org/v1/taxa/$inatId")).optJSONArray("results")?.optJSONObject(0)
             } else {
-                val r = JSONObject(fetch("https://api.inaturalist.org/v1/taxa?per_page=5&q=" + URLEncoder.encode(latin, "UTF-8"), null)).optJSONArray("results")
+                val r = JSONObject(fetch("https://api.inaturalist.org/v1/taxa?per_page=5&q=" + URLEncoder.encode(latin, "UTF-8"))).optJSONArray("results")
                 (0 until (r?.length() ?: 0)).map { r!!.getJSONObject(it) }.firstOrNull { it.optString("name") == latin }
             } ?: return@runCatching emptyList()
             val all = buildList {
@@ -142,50 +143,6 @@ object SpeciesInfo {
         fetched.also { refMemory[latin] = it }
     }
 
-    private class Article(val summary: String?, val url: String?, val genus: Boolean)
-
-    /**
-     * The species' own article, else its genus' (flagged), else nothing. In
-     * Chinese, our own Chinese name is the safest title (家猫 → 猫); a search
-     * by the scientific name is accepted only if the article names it in
-     * Chinese too — the top hit for "Felis catus" is 猫属, the genus.
-     */
-    private fun article(t: SpeciesId.Taxon): Article {
-        val lang = lang()
-        val host = if (lang == "en") "en.wikipedia.org" else "zh.wikipedia.org"
-        fun find(latin: String, zh: String?): Pair<String, String?>? {
-            if (lang != "en" && zh != null) summary(host, zh, lang)?.let { return it }
-            val title = search(host, latin, lang) ?: return null
-            val hit = summary(host, title, lang) ?: return null
-            return if (lang == "en" || zh == null || zh in title || zh in hit.first) hit else null
-        }
-        find(t.latin, t.zh)?.let { return Article(it.first, it.second, genus = false) }
-        if (' ' in t.latin) find(t.genusLatin, t.genusZh)?.let { return Article(it.first, it.second, genus = true) }
-        return Article(null, null, genus = false)
-    }
-
-    private fun search(host: String, phrase: String, lang: String): String? {
-        val q = URLEncoder.encode("\"$phrase\"", "UTF-8")
-        val o = JSONObject(fetch("https://$host/w/api.php?action=query&list=search&srsearch=$q&srlimit=1&format=json", lang))
-        return o.optJSONObject("query")?.optJSONArray("search")?.optJSONObject(0)?.optString("title")?.ifBlank { null }
-    }
-
-    /** (extract, url) of a page, following redirects; null for missing pages and disambiguations. */
-    private fun summary(host: String, title: String, lang: String): Pair<String, String?>? {
-        val body = runCatching { fetch("https://$host/api/rest_v1/page/summary/" + URLEncoder.encode(title, "UTF-8").replace("+", "%20"), lang) }.getOrNull()
-            ?: return null
-        val s = JSONObject(body)
-        if (s.optString("type") != "standard") return null
-        val text = s.optString("extract").ifBlank { return null }
-        return text to s.optJSONObject("content_urls")?.optJSONObject("mobile")?.optString("page")
-    }
-
-    private fun months(inatId: Long): List<Int>? {
-        val o = JSONObject(fetch("https://api.inaturalist.org/v1/observations/histogram?taxon_id=$inatId&place_id=$CHINA&interval=month_of_year&verifiable=true", null))
-        val m = o.optJSONObject("results")?.optJSONObject("month_of_year") ?: return null
-        return (1..12).map { m.optInt(it.toString()) }
-    }
-
     /** Same shape as the other small API clients (WeatherManager): short timeouts, a small reused pool. */
     private val client = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
@@ -195,9 +152,8 @@ object SpeciesInfo {
         .connectionPool(ConnectionPool(4, 30, TimeUnit.SECONDS))
         .build()
 
-    private fun fetch(url: String, lang: String?): String {
+    private fun fetch(url: String): String {
         val req = Request.Builder().url(url).header("User-Agent", UA)
-        if (lang != null && lang != "en") req.header("Accept-Language", lang)
         client.newCall(req.build()).execute().use { r ->
             check(r.isSuccessful) { "HTTP ${r.code}" }
             return r.body?.string().orEmpty()
