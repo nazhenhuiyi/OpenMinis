@@ -7,6 +7,7 @@ import com.openminis.app.data.journal.JournalStore
 import com.openminis.app.data.murmur.DishRules
 import com.openminis.app.data.murmur.MoodTier
 import com.openminis.app.data.murmur.MurmurAgent
+import com.openminis.app.data.murmur.MurmurAgentQueue
 import com.openminis.app.data.murmur.MurmurIndex
 import com.openminis.app.data.murmur.MurmurLabels
 import com.openminis.app.data.murmur.MurmurLlm
@@ -15,7 +16,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -64,21 +64,19 @@ internal class TodayMurmur(
     private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     private val zone: ZoneId get() = ZoneId.systemDefault()
     private var job: Job? = null
-    /** Minis working on murmurs in the background (§19.3), one at a time. */
-    private var agentJob: Job? = null
-    private val _working = MutableStateFlow<String?>(null)
-    /** The murmur Minis is looking at right now, if any: "Minis 正在看这条…" under it. */
-    val working: StateFlow<String?> = _working
-    /** The day old background chats were last cleared out, and whether all were (智能建议 off): once each, not every pass. */
-    private var clearedOn: LocalDate? = null
-    private var clearedAll = false
     private var pending: List<TodayDay>? = null
     private var lastDays: List<TodayDay> = emptyList()
     private var retryJob: Job? = null
-    /** Asked the cloud this session (ok or not): never twice for the same text. */
-    private val asked = HashSet<String>()
     /** Texts the model could not tag this session: not tried again on every reload (each try loads the model). */
     private val failed = HashSet<String>()
+
+    init {
+        // Suggestions stored or chats cleared by the queue: show what is there now.
+        scope.launch { MurmurAgentQueue.changes.collect { publishFor(lastDays) } }
+    }
+
+    /** The murmur Minis is looking at right now, if any: "Minis 正在看这条…" under it. */
+    val working: StateFlow<String?> get() = MurmurAgentQueue.working
 
     val ready: Boolean get() = MurmurLlm.isReady(context)
     var moodColors: Boolean
@@ -127,8 +125,7 @@ internal class TodayMurmur(
             withContext(Dispatchers.IO) { index.putTags(id, n.entry.body, t) }
             publishFor(days)
         }
-        if (smartSuggest) suggest(days)
-        else if (!clearedAll && agentJob?.isActive != true) { clearedAll = true; agentJob = scope.launch { clearOldChats(all = true) } }
+        if (smartSuggest) suggest(days) else MurmurAgentQueue.clearAll(context)
         if (settling) {
             retryJob?.cancel()
             retryJob = scope.launch { delay(SETTLE_MS); reload() }
@@ -136,14 +133,12 @@ internal class TodayMurmur(
     }
 
     /**
-     * §19.3: murmurs from the last day that pass the sift go to Minis, one at a
-     * time, in their own job — a background chat can take minutes and must not
-     * hold up tagging. Each is judged once (again only if an older brief judged
-     * it and the user left it alone). Chats never opened are cleared out the next day.
+     * §19.3: murmurs from the last day that pass the sift go to Minis — handed
+     * to [MurmurAgentQueue], which the app owns, so a chat being prepared is not
+     * cut off when this screen goes. Each is judged once (again only if an older
+     * brief judged it and the user left it alone).
      */
     private fun suggest(days: List<TodayDay>) {
-        clearedAll = false
-        if (agentJob?.isActive == true) return
         val since = System.currentTimeMillis() - SUGGEST_WINDOW_MS
         val todo = notesOf(days).filter { it.atMs >= since && !it.entry.writtenByMinis }.sortedByDescending { it.atMs }.filter { n ->
             val id = n.entry.id!!
@@ -153,48 +148,9 @@ internal class TodayMurmur(
             // Judged before — unless by an older brief and left untouched ("none", or an offer never answered): once more.
             val redo = had != null && had.promptVersion < MurmurAgent.BRIEF_VERSION &&
                 (had.state == MurmurSuggestion.NONE || had.state == MurmurSuggestion.OFFER)
-            if (had != null && !redo) return@filter false
-            MurmurLabels.isCandidate(body, tags) && asked.add(id + MurmurIndex.hash(body))
+            (had == null || redo) && MurmurLabels.isCandidate(body, tags)
         }
-        val today = LocalDate.now(zone)
-        val clear = clearedOn != today
-        if (todo.isEmpty() && !clear) return
-        agentJob = scope.launch {
-            if (clear) { clearOldChats(); clearedOn = today }
-            for (n in todo) {
-                val id = n.entry.id!!
-                // Redone, or the murmur was edited since: the chat from before goes first (any text, so none is left behind).
-                // A chat the user opened is theirs now and stays.
-                index.rawSuggestion(id)?.takeIf { it.sessionId.isNotBlank() && it.state != MurmurSuggestion.OPENED }?.let { old ->
-                    runCatching { MurmurAgent.discard(context, old.sessionId) }
-                    withContext(Dispatchers.IO) { index.putSuggestion(id, old.copy(sessionId = "")) }
-                }
-                _working.value = id
-                val s = try {
-                    MurmurAgent.prepare(context, n.entry.body, n.atMs, MurmurIndex.hash(n.entry.body))
-                } finally {
-                    _working.value = null
-                }
-                if (s != null) withContext(Dispatchers.IO) { index.putSuggestion(id, s) }
-                publishFor(lastDays)
-            }
-        }
-    }
-
-    /**
-     * Background chats never opened, for offers no longer shown (not today's) —
-     * or, [all], every one (智能建议 turned off): deleted.
-     */
-    private suspend fun clearOldChats(all: Boolean = false) {
-        val today = LocalDate.now(zone)
-        val cleared = HashMap<String, MurmurSuggestion>()
-        for ((id, s) in index.allSuggestions()) {
-            if (s.sessionId.isBlank() || s.state == MurmurSuggestion.OPENED) continue
-            if (!all && !Instant.ofEpochMilli(s.createdMs).atZone(zone).toLocalDate().isBefore(today)) continue
-            runCatching { MurmurAgent.discard(context, s.sessionId) }
-            cleared[id] = s.copy(sessionId = "")
-        }
-        withContext(Dispatchers.IO) { index.putSuggestions(cleared) }
+        MurmurAgentQueue.enqueue(context, todo.map { MurmurAgentQueue.Item(it.entry.id!!, it.entry.body, it.atMs) })
     }
 
     private fun publishFor(days: List<TodayDay>) {
@@ -354,7 +310,8 @@ internal class TodayMurmur(
         private const val KEY_MOOD_HINT = "moodHintShown"
         /** A user's own mood colour, written into the entry (§19.2). */
         const val MOOD_ATTR = "mood"
-        private const val SETTLE_MS = 15_000L
+        /** A murmur just written or edited waits this long before it is read (author, 2026-10-16: 15 s felt too slow). */
+        private const val SETTLE_MS = 2_000L
         private const val SUGGEST_WINDOW_MS = 24 * 60 * 60 * 1000L
         private const val MAX_OFFERS_A_DAY = 3
 

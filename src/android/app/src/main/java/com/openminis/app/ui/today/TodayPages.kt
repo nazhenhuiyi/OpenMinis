@@ -26,6 +26,14 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.slideInVertically
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -50,6 +58,27 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
 // Pieces shared by Today's full-screen pages (心情, 我的菜单, 那一天).
+
+/**
+ * A card that is new fades in, once: [fresh] comes from the data (made in this
+ * run, not yet seen), not from being composed — so scrolling past, switching
+ * tabs or reloading shows it as it is. [onAppeared] once the fade is done, so
+ * the data can stop calling it new.
+ */
+@Composable
+internal fun AppearOnce(fresh: Boolean, onAppeared: () -> Unit, content: @Composable () -> Unit) {
+    if (!fresh) {
+        content()
+        return
+    }
+    var shown by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        shown = true
+        kotlinx.coroutines.delay(400)
+        onAppeared()
+    }
+    AnimatedVisibility(shown, enter = fadeIn(tween(350)) + slideInVertically(tween(350)) { -it / 3 }) { content() }
+}
 
 /** Something just done, said in a short snackbar that can take it back; a newer one replaces it. */
 internal fun CoroutineScope.offerUndo(snackbar: SnackbarHostState, text: String, undoLabel: String, undo: () -> Unit) {

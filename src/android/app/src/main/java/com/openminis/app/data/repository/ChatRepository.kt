@@ -641,7 +641,8 @@ class ChatRepository(internal val dao: ChatDao) {
         startMs: Long?,
         endMs: Long?,
     ): List<SessionMeta> {
-        val conditions = mutableListOf<String>()
+        // [T-today-murmur-agent] Murmur chats not opened yet are not the user's chats (yet): not listed to the agent either.
+        val conditions = mutableListOf(ChatSessionEntity.NOT_MURMUR_PENDING.replace("source", "s.source"))
         val args = mutableListOf<Any>()
 
         if (!sessionIds.isNullOrEmpty()) {

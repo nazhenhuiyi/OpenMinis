@@ -1,12 +1,10 @@
 package com.openminis.app.ui.today
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
-import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -354,29 +352,24 @@ private fun MoodNoteRow(n: MoodNote, picking: Boolean, onToggle: () -> Unit, onP
 
 // ───────────────────────── Suggestions (§19.3) ─────────────────────────
 
-/** Suggestion cards already shown once this run: they appear without the fade from then on. */
-private val seenSuggestions = HashSet<String>()
-
-/** Only a suggestion just made fades in, and only the first time it is seen. */
-private const val FRESH_MS = 10 * 60 * 1000L
-
 /**
  * A suggestion under a murmur (§19.3), in the same shape as the species
  * suggestion: a soft tinted card — the one line Minis wrote first, the start
  * of the rest beneath, "继续聊 ›" to carry on in that chat, and a faint ×
- * ("不用"). It fades in once, when it is new; scrolling past or coming back
- * to Today shows it as it is.
+ * ("不用"). A new one ([fresh]) fades in once; otherwise it simply shows.
  */
 @Composable
-internal fun MurmurSuggestionLine(s: MurmurSuggestion, onOpen: () -> Unit, onDismiss: () -> Unit) {
-    val key = s.sessionId.ifEmpty { s.hash }
-    val animate = remember(key) { key !in seenSuggestions && System.currentTimeMillis() - s.createdMs < FRESH_MS }
-    var shown by remember(key) { mutableStateOf(!animate) }
-    LaunchedEffect(key) { seenSuggestions += key; shown = true }
+internal fun MurmurSuggestionLine(
+    s: MurmurSuggestion,
+    onOpen: () -> Unit,
+    onDismiss: () -> Unit,
+    fresh: Boolean = false,
+    onAppeared: () -> Unit = {},
+) {
     val sub = MaterialTheme.colorScheme.onSurfaceVariant
     val accent = MaterialTheme.colorScheme.primary
     val opened = s.state == MurmurSuggestion.OPENED
-    AnimatedVisibility(shown, enter = fadeIn(tween(350)) + slideInVertically(tween(350)) { -it / 3 }) {
+    AppearOnce(fresh, onAppeared) {
         Row(
             Modifier.padding(top = 8.dp).fillMaxWidth().clip(RoundedCornerShape(14.dp))
                 .background(accent.copy(alpha = if (opened) 0.06f else 0.11f))

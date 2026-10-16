@@ -90,8 +90,7 @@ interface ChatDao {
      * limit counts only rows that can actually be shown.
      */
     @Query(
-        // [T-today-murmur-agent] Nor murmur chats not opened yet (ChatSessionEntity.isHiddenFromLists).
-        "SELECT * FROM sessions WHERE parent_session_id IS NULL AND (source IS NULL OR source != 'murmur_pending') AND id != :excludeId " +
+        "SELECT * FROM sessions WHERE " + ChatSessionEntity.SHOWN_IN_LISTS + " AND id != :excludeId " +
             "ORDER BY updated_at DESC LIMIT :limit",
     )
     suspend fun listRecentMovableSessions(
@@ -347,7 +346,7 @@ interface ChatDao {
     suspend fun lastAssistantParts(sessionId: String): String?
 
     /** [T-today-murmur-agent] Murmur chats never opened and untouched since [olderThanMs]: swept at cold start. */
-    @Query("SELECT id FROM sessions WHERE source = 'murmur_pending' AND updated_at < :olderThanMs")
+    @Query("SELECT id FROM sessions WHERE source = '" + ChatSessionEntity.SOURCE_MURMUR_PENDING + "' AND updated_at < :olderThanMs")
     suspend fun staleMurmurPendingIds(olderThanMs: Long): List<String>
 
     /**

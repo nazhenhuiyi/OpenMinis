@@ -91,11 +91,21 @@ data class ChatSessionEntity(
      */
     val isMurmurPending: Boolean get() = source == SOURCE_MURMUR_PENDING
 
-    /** Not shown in session lists and pickers: sub agent children and murmur chats not opened yet. */
+    /**
+     * Not shown in session lists and pickers: sub agent children and murmur chats
+     * not opened yet. The one rule — every list, picker and notification asks
+     * this (or, in SQL, [SHOWN_IN_LISTS]); a new hidden kind is added here only.
+     */
     val isHiddenFromLists: Boolean get() = isChild || isMurmurPending
 
     companion object {
         const val SOURCE_MURMUR_PENDING = "murmur_pending"
         const val SOURCE_MURMUR = "murmur"
+
+        /** SQL twin of `!isMurmurPending`, over the `sessions` columns. */
+        const val NOT_MURMUR_PENDING = "(source IS NULL OR source != '$SOURCE_MURMUR_PENDING')"
+
+        /** SQL twin of `!isHiddenFromLists`. Keep the two in step. */
+        const val SHOWN_IN_LISTS = "parent_session_id IS NULL AND $NOT_MURMUR_PENDING"
     }
 }

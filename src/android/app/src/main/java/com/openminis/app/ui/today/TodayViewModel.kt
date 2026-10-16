@@ -229,6 +229,15 @@ class TodayViewModel(app: Application) : AndroidViewModel(app), ExploreSources {
     /** The murmur Minis is looking at in the background right now (§19.3), if any. */
     val murmurWorking: StateFlow<String?> get() = murmur.working
 
+    /** Murmurs whose suggestion was just made and not seen yet: the card fades in, once. */
+    val murmurFresh: StateFlow<Set<String>> get() = com.openminis.app.data.murmur.MurmurAgentQueue.fresh
+    fun murmurSeen(id: String) = com.openminis.app.data.murmur.MurmurAgentQueue.seen(id)
+
+    private val _freshSpecies = MutableStateFlow<Set<String>>(emptySet())
+    /** Photos identified in this run and not seen yet (§17.2): their suggestion fades in, once. */
+    val freshSpecies: StateFlow<Set<String>> = _freshSpecies.asStateFlow()
+    fun speciesSeen(paths: Collection<String>) = _freshSpecies.update { it - paths.toSet() }
+
     /** "不用" under a murmur; returns an undo (null if there was nothing to change). */
     fun dismissMurmurSuggestion(note: TodayNote): (() -> Unit)? = murmur.dismiss(note)?.let { prev -> { murmur.restore(note, prev) } }
 
@@ -502,8 +511,11 @@ class TodayViewModel(app: Application) : AndroidViewModel(app), ExploreSources {
             speciesCache.edit().apply { for ((k, v) in verdicts) if (speciesCache.getString(k, null) == null) putString(k, v) }.apply()
             // Only ever a suggestion: adding to the collection is the user's own, deliberate step (§17.2).
             // Not for photos tagged or dismissed while the group was being looked at.
-            if (found.isNotEmpty()) _state.update { st ->
-                st.copy(suggestions = st.suggestions + found.filterKeys { it !in st.tags && speciesCache.getString(it, null) != USER_NO })
+            if (found.isNotEmpty()) {
+                _state.update { st ->
+                    st.copy(suggestions = st.suggestions + found.filterKeys { it !in st.tags && speciesCache.getString(it, null) != USER_NO })
+                }
+                _freshSpecies.update { it + found.keys }
             }
         }
         // Ready for the next Record tap, off the load path (rebuilt only after a reload dropped it).

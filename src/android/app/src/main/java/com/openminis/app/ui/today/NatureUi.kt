@@ -36,7 +36,6 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
@@ -46,8 +45,6 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -218,10 +215,17 @@ internal fun PhotoImage(photo: CameraPhoto?, modifier: Modifier, size: Int = 600
  * × says no. It never adds anything by itself.
  */
 @Composable
-internal fun SpeciesSuggestionChip(photo: CameraPhoto, count: Int, s: SpeciesSuggestion, onOpen: () -> Unit, onDismiss: () -> Unit) {
-    var shown by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { shown = true }
-    AnimatedVisibility(shown, enter = fadeIn(tween(350)) + slideInVertically(tween(350)) { -it / 3 }) {
+internal fun SpeciesSuggestionChip(
+    photo: CameraPhoto,
+    count: Int,
+    s: SpeciesSuggestion,
+    onOpen: () -> Unit,
+    onDismiss: () -> Unit,
+    // Fades in only when just identified (not on every scroll back to it).
+    fresh: Boolean = false,
+    onAppeared: () -> Unit = {},
+) {
+    AppearOnce(fresh, onAppeared) {
         Row(
             Modifier.padding(top = 8.dp).fillMaxWidth().clip(RoundedCornerShape(14.dp))
                 .background(LeafSoft).clickable(onClick = onOpen).testTag("today_species_chip"),

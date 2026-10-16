@@ -171,6 +171,8 @@ fun TodayScreen(
     val context = LocalContext.current
     val state by vm.state.collectAsState()
     val murmurWorking by vm.murmurWorking.collectAsState()
+    val murmurFresh by vm.murmurFresh.collectAsState()
+    val freshSpecies by vm.freshSpecies.collectAsState()
     val draft by vm.draft.collectAsState()
     val scope = rememberCoroutineScope()
     val clipboard = LocalClipboardManager.current
@@ -422,6 +424,8 @@ fun TodayScreen(
                                 onCancelEdit = { editingId = null; editPhotos = null },
                                 suggestion = row.note.entry.id?.let { state.murmurSuggestions[it] },
                                 minisWorking = state.smartSuggest && row.note.entry.id != null && row.note.entry.id == murmurWorking,
+                                suggestionFresh = row.note.entry.id in murmurFresh,
+                                onSuggestionAppeared = { row.note.entry.id?.let(vm::murmurSeen) },
                                 // Opening it carries on in the chat Minis prepared; "不用" can be taken back (§19.3).
                                 onOpenSuggestion = { scope.launch { vm.openMurmurChat(row.note)?.let(onOpenChat) } },
                                 onDismissSuggestion = {
@@ -450,6 +454,8 @@ fun TodayScreen(
                                                     s = sug,
                                                     onOpen = { whatIs = WhatIs(photos, sug, row.group.photos) },
                                                     onDismiss = { offerUndo(dismissedText, vm.dismissSuggestions(photos)) },
+                                                    fresh = photos.any { it.relativePath in freshSpecies },
+                                                    onAppeared = { vm.speciesSeen(photos.map { it.relativePath }) },
                                                 )
                                             }
                                         }
@@ -919,6 +925,8 @@ private fun NoteRow(
     tags: Map<String, com.openminis.app.data.species.PhotoTag> = emptyMap(),
     suggestion: com.openminis.app.data.murmur.MurmurSuggestion? = null,
     minisWorking: Boolean = false,
+    suggestionFresh: Boolean = false,
+    onSuggestionAppeared: () -> Unit = {},
     onOpenSuggestion: () -> Unit = {},
     onDismissSuggestion: () -> Unit = {},
     moodWord: String? = null,
@@ -980,7 +988,10 @@ private fun NoteRow(
             exit = androidx.compose.animation.fadeOut() + androidx.compose.animation.shrinkVertically(),
         ) { MoodPicker(moodWord) { w -> pickingMood = false; onSetMood(w) } }
         when {
-            suggestion != null -> MurmurSuggestionLine(suggestion, onOpen = onOpenSuggestion, onDismiss = onDismissSuggestion)
+            suggestion != null -> MurmurSuggestionLine(
+                suggestion, onOpen = onOpenSuggestion, onDismiss = onDismissSuggestion,
+                fresh = suggestionFresh, onAppeared = onSuggestionAppeared,
+            )
             // Minis is on it in the background: one quiet line, so a wait of a minute does not look like nothing.
             minisWorking -> Text(
                 stringResource(R.string.today_suggest_working),
