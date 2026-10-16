@@ -317,7 +317,7 @@ class SessionListViewModel(
                 // DAO: sync, backup and the debug RPC must still see them. Done
                 // at the source rather than only in displayedSessions so group
                 // counts, select-all and the new-session detector agree.
-                val it = rows.filter { !it.isChild }
+                val it = rows.filter { !it.isHiddenFromLists }
                 _allSessions.value = it
                 if (!_isInitialLoadComplete.value) _isInitialLoadComplete.value = true
                 detectNewTopSession(it)

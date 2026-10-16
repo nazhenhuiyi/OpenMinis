@@ -1,5 +1,6 @@
 package com.openminis.app.ui.today
 
+import com.openminis.app.data.murmur.MurmurLabels
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -9,7 +10,10 @@ import kotlin.random.Random
 // ways they did not expect — an old page, their firsts, small findings. All
 // from the journal on the phone; nothing leaves it.
 
-/** One note as 探索 sees it: words, photos and where. */
+/**
+ * One note as 探索 sees it: words, photos and where; [wish] = what became of
+ * a wish in it (the `wish` attribute) and [wishOn] the day it came true.
+ */
 data class ExploreNote(
     val id: String,
     val date: LocalDate,
@@ -17,13 +21,25 @@ data class ExploreNote(
     val body: String,
     val photos: List<String>,
     val place: String?,
+    val wish: String? = null,
+    val wishOn: LocalDate? = null,
 )
+
+/**
+ * Something the author wrote they would like to do (心愿单, SPEC §20): [text]
+ * is the sentence that says so. Ticked off or let go in the journal itself,
+ * as the entry's `wish` attribute ([Explore.WISH_DONE] / [Explore.WISH_DROPPED]).
+ */
+data class Wish(val note: ExploreNote, val text: String) {
+    val done: Boolean get() = note.wish == Explore.WISH_DONE
+    val open: Boolean get() = note.wish == null
+}
 
 /** A page turned up for today: from this day [monthsAgo] months back, or (null) at random. */
 data class ExplorePage(val note: ExploreNote, val monthsAgo: Int?)
 
 /**
- * A first time: a kind first seen, or a dish first made. [key] opens it
+ * A first time: a kind first seen, or a dish first written about. [key] opens it
  * (latin name / dish); [photo] is a relative path from that first time,
  * [noteId] the murmur it was written in (dishes: 我的菜单 scrolls to it).
  */
@@ -52,6 +68,21 @@ data class ExploreFacts(
 )
 
 object Explore {
+    const val WISH_DONE = "done"
+    const val WISH_DROPPED = "dropped"
+
+    private val SENTENCE = Regex("[。！？!?\\n；;]")
+
+    /** The wish in [note], as its sentence; null if it has none. */
+    fun wishIn(note: ExploreNote): Wish? {
+        val sentence = note.body.split(SENTENCE).map { it.trim() }
+            .firstOrNull { MurmurLabels.WISH.containsMatchIn(it) && !MurmurLabels.NOT_A_WISH.containsMatchIn(it) } ?: return null
+        return Wish(note, sentence.trimEnd('，', ',', '～', '~', ' '))
+    }
+
+    /** Every wish, newest first. */
+    fun wishes(notes: List<ExploreNote>): List<Wish> = notes.mapNotNull(::wishIn).sortedByDescending { it.note.atMs }
+
     /** How many pages a day: something to look forward to, not a feed. */
     const val PAGES_A_DAY = 3
 
@@ -130,18 +161,18 @@ object Explore {
     }
 
     /**
-     * Each kind's first sighting and each dish's first making, newest first —
-     * at most [perKind] of each, so a busy month of plants does not hide the
-     * kitchen.
+     * Each kind's first sighting and the first murmur naming each dish, newest
+     * first — at most [perKind] of each, so a busy month of plants does not
+     * hide the table.
      */
     fun firsts(species: List<CollectedSpecies>, food: List<FoodNote>, perKind: Int = 4): List<ExploreFirst> {
-        val made = HashMap<String, FoodNote>()
-        for (f in food) for ((dish, mine) in f.dishes) {
-            if (mine && f.atMs < (made[dish]?.atMs ?: Long.MAX_VALUE)) made[dish] = f
+        val first = HashMap<String, FoodNote>()
+        for (f in food) for (dish in f.dishes) {
+            if (f.atMs < (first[dish]?.atMs ?: Long.MAX_VALUE)) first[dish] = f
         }
         val kinds = species.map { ExploreFirst(true, it.name, it.first.atMs, it.latin, it.first.photos.firstOrNull()?.relativePath) }
             .sortedByDescending { it.atMs }.take(perKind)
-        val dishes = made.map { (dish, f) -> ExploreFirst(false, dish, f.atMs, dish, f.photos.firstOrNull(), f.id) }
+        val dishes = first.map { (dish, f) -> ExploreFirst(false, dish, f.atMs, dish, f.photos.firstOrNull(), f.id) }
             .sortedByDescending { it.atMs }.take(perKind)
         return (kinds + dishes).sortedByDescending { it.atMs }
     }
@@ -159,6 +190,8 @@ data class ExploreData(
     val showFood: Boolean,
     /** The food murmurs, newest first: 我的菜单 opens on these at once. */
     val food: List<FoodNote>,
+    /** 心愿单: every wish, newest first, open and done (let-go ones are left out). */
+    val wishes: List<Wish>,
     val foodCover: com.openminis.app.data.photos.CameraPhoto?,
     /** The pages' photos, by relative path. */
     val photos: Map<String, com.openminis.app.data.photos.CameraPhoto>,

@@ -133,7 +133,7 @@ fun MoveToSessionSheet(
         chatRepository.dao.observeSessions()
             .map { all ->
                 all.asSequence()
-                    .filter { it.id != currentSessionId && !it.isChild }
+                    .filter { it.id != currentSessionId && !it.isHiddenFromLists }
                     .take(MOVE_TO_SESSION_LIMIT)
                     .toList()
             }

@@ -129,9 +129,22 @@ class ExploreViewModel(app: Application, private val sources: ExploreSources) : 
             natureCover = species.firstOrNull()?.photos?.firstOrNull(),
             showFood = sources.murmurReady || food.isNotEmpty(),
             food = food,
+            wishes = Explore.wishes(notes).filter { it.note.wish != Explore.WISH_DROPPED },
             foodCover = foodCover?.let(photos::get),
             photos = photos,
         )
+    }
+
+    /**
+     * Tick a wish off ([Explore.WISH_DONE]), let it go ([Explore.WISH_DROPPED]),
+     * or (null) put it back. Written into the entry: what became of a wish is the
+     * author's own word, like a mood they set. The page rebuilds from the change.
+     */
+    fun setWish(note: ExploreNote, state: String?) {
+        viewModelScope.launch {
+            val on = if (state == Explore.WISH_DONE) LocalDate.now().toString() else null
+            store.setAttrs(note.date, note.id, mapOf(JournalEntry.KEY_WISH to state, JournalEntry.KEY_WISH_ON to on))
+        }
     }
 
     /** One day's notes for the "that day" page, oldest first, with their photos. */
@@ -147,7 +160,7 @@ class ExploreViewModel(app: Application, private val sources: ExploreSources) : 
             .map { e ->
                 ExploreNote(
                     e.id!!, date, e.at?.toInstant()?.toEpochMilli() ?: date.atStartOfDay(zone).toInstant().toEpochMilli(),
-                    e.body, e.photos, e.place,
+                    e.body, e.photos, e.place, e.attrs[JournalEntry.KEY_WISH], e.attrs[JournalEntry.KEY_WISH_ON]?.let { runCatching { LocalDate.parse(it) }.getOrNull() },
                 )
             }
             .sortedBy { it.atMs }

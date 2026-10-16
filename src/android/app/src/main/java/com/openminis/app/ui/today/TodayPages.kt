@@ -43,8 +43,21 @@ import androidx.compose.ui.window.DialogWindowProvider
 import androidx.core.view.WindowCompat
 import com.openminis.app.R
 import com.openminis.app.data.photos.CameraPhoto
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 
 // Pieces shared by Today's full-screen pages (心情, 我的菜单, 那一天).
+
+/** Something just done, said in a short snackbar that can take it back; a newer one replaces it. */
+internal fun CoroutineScope.offerUndo(snackbar: SnackbarHostState, text: String, undoLabel: String, undo: () -> Unit) {
+    launch {
+        snackbar.currentSnackbarData?.dismiss()
+        if (snackbar.showSnackbar(text, actionLabel = undoLabel, duration = SnackbarDuration.Short) == SnackbarResult.ActionPerformed) undo()
+    }
+}
 
 /**
  * A page over everything, edge to edge: back arrow then [header] on top,

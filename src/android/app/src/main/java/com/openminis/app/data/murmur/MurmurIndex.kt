@@ -44,6 +44,7 @@ class MurmurIndex private constructor(context: Context) {
                     mentions = e.getJSONArray("n").let { a -> List(a.length()) { a.getJSONArray(it).let { p -> p.getString(0) to p.getString(1) } } },
                     highlight = e.getBoolean("hl"),
                     actScore = e.getDouble("p").toFloat(),
+                    moodConf = if (e.has("mc")) e.getDouble("mc").toFloat() else null,
                 )
             }
         }
@@ -76,6 +77,7 @@ class MurmurIndex private constructor(context: Context) {
                     put("i", x.intent); put("m", x.mood); put("a", JSONArray(x.aspects))
                     put("n", JSONArray(x.mentions.map { JSONArray(listOf(it.first, it.second)) }))
                     put("hl", x.highlight); put("p", x.actScore.toDouble())
+                    x.moodConf?.let { put("mc", it.toDouble()) }
                 })
             }
         }
@@ -85,10 +87,17 @@ class MurmurIndex private constructor(context: Context) {
     /** The suggestion for this text; one made for an earlier version of the text no longer applies. */
     @Synchronized fun suggestion(id: String, body: String): MurmurSuggestion? = suggestions[id]?.takeIf { it.hash == hash(body) }
 
+    /** Whatever is stored for [id], for any version of its text. */
+    @Synchronized fun rawSuggestion(id: String): MurmurSuggestion? = suggestions[id]
+
     @Synchronized fun allSuggestions(): Map<String, MurmurSuggestion> = HashMap(suggestions)
 
-    @Synchronized fun putSuggestion(id: String, s: MurmurSuggestion) {
-        suggestions[id] = s
+    @Synchronized fun putSuggestion(id: String, s: MurmurSuggestion) = putSuggestions(mapOf(id to s))
+
+    /** Several at once, one write. */
+    @Synchronized fun putSuggestions(changed: Map<String, MurmurSuggestion>) {
+        if (changed.isEmpty()) return
+        suggestions.putAll(changed)
         write(suggestionsFile, JSONObject().apply { for ((k, v) in suggestions) put(k, v.toJson()) })
     }
 
@@ -120,36 +129,33 @@ class MurmurIndex private constructor(context: Context) {
 data class MurmurSuggestion(
     val hash: String,
     val state: String,
-    val type: String = "",
-    /** Reminder: what to remind of, and when (epoch ms). */
+    /** The one-line summary Minis wrote first, shown under the murmur. */
     val title: String = "",
-    val atMs: Long = 0,
-    /** Answer: the question as the cloud read it, and its answer. */
-    val question: String = "",
-    val answer: String = "",
-    /** Ask Minis: the message to start the chat with. */
-    val prompt: String = "",
+    /** The start of what follows it, for the card's second line. */
+    val preview: String = "",
+    /** The background chat it was prepared in; "" once that chat is gone. */
+    val sessionId: String = "",
     val createdMs: Long = System.currentTimeMillis(),
+    /** The brief it was judged with ([MurmurAgent.BRIEF_VERSION]); 0 = before versions. */
+    val promptVersion: Int = 0,
 ) {
     fun toJson() = JSONObject().apply {
-        put("h", hash); put("s", state); put("t", type); put("title", title); put("at", atMs)
-        put("q", question); put("ans", answer); put("prompt", prompt); put("c", createdMs)
+        put("h", hash); put("s", state); put("title", title); put("pre", preview); put("sid", sessionId)
+        put("c", createdMs); put("pv", promptVersion)
     }
 
     companion object {
+        /** Ready under the murmur, not tapped yet. */
         const val OFFER = "offer"
+        /** Tapped: the chat is in the list now. */
+        const val OPENED = "opened"
         const val NONE = "none"
         const val DISMISSED = "dismissed"
-        const val SCHEDULED = "scheduled"
-        const val TYPE_REMINDER = "reminder"
-        const val TYPE_ANSWER = "answer"
-        const val TYPE_ASK = "ask_minis"
 
         fun from(o: JSONObject): MurmurSuggestion? = runCatching {
             MurmurSuggestion(
-                hash = o.getString("h"), state = o.getString("s"), type = o.optString("t"), title = o.optString("title"),
-                atMs = o.optLong("at"), question = o.optString("q"), answer = o.optString("ans"), prompt = o.optString("prompt"),
-                createdMs = o.optLong("c"),
+                hash = o.getString("h"), state = o.getString("s"), title = o.optString("title"), preview = o.optString("pre"),
+                sessionId = o.optString("sid"), createdMs = o.optLong("c"), promptVersion = o.optInt("pv"),
             )
         }.getOrNull()
     }

@@ -18,7 +18,6 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -44,13 +43,10 @@ import androidx.compose.material.icons.outlined.SentimentSatisfiedAlt
 import androidx.compose.material.icons.outlined.SentimentVeryDissatisfied
 import androidx.compose.material.icons.outlined.SentimentVerySatisfied
 import androidx.compose.material.icons.outlined.Whatshot
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TimeInput
-import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -63,7 +59,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -74,10 +69,8 @@ import com.openminis.app.R
 import com.openminis.app.data.murmur.MoodTier
 import com.openminis.app.data.murmur.MurmurSuggestion
 import java.time.DayOfWeek
-import java.time.Instant
 import java.time.LocalDate
 import java.time.YearMonth
-import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.TextStyle
 import java.util.Locale
@@ -110,25 +103,47 @@ internal fun MoodTier.label(): String = stringResource(
 /** A neutral murmur says nothing: only words that carry a feeling are shown in the timeline. */
 internal fun shownMood(word: String?): String? = word?.takeIf { it != "平静" && MoodTier.fromLabel(it) != MoodTier.PLAIN }
 
-/** One line icon per mood word; the tier gives its colour. */
-internal fun moodIcon(word: String): ImageVector = when (word) {
-    "开心" -> Icons.Outlined.SentimentVerySatisfied
-    "满足" -> Icons.Outlined.SentimentSatisfiedAlt
-    "感动" -> Icons.Outlined.FavoriteBorder
-    "期待" -> Icons.Outlined.AutoAwesome
-    "好奇" -> Icons.Outlined.Explore
-    "疲惫" -> Icons.Outlined.Bedtime
-    "低落" -> Icons.Outlined.SentimentDissatisfied
-    "焦虑" -> Icons.Outlined.SentimentVeryDissatisfied
-    "烦躁" -> Icons.Outlined.MoodBad
-    "生气" -> Icons.Outlined.Whatshot
-    "难受" -> Icons.Outlined.Healing
-    else -> when (MoodTier.of(word)) {
-        MoodTier.BRIGHT -> Icons.Outlined.SentimentSatisfiedAlt
-        MoodTier.DIM -> Icons.Outlined.SentimentDissatisfied
-        MoodTier.PLAIN -> Icons.Outlined.SentimentNeutral
-    }
+/**
+ * Each mood word's two faces: a quiet line icon (the timeline) and an emoji
+ * (the mood page). One table, so a word is never in one and missing from the
+ * other; a word not in it (an older tier label) gets its tier's.
+ */
+private val MOOD_FACES: Map<String, Pair<ImageVector, String>> = mapOf(
+    "开心" to (Icons.Outlined.SentimentVerySatisfied to "😄"),
+    "满足" to (Icons.Outlined.SentimentSatisfiedAlt to "😊"),
+    "感动" to (Icons.Outlined.FavoriteBorder to "🥹"),
+    "期待" to (Icons.Outlined.AutoAwesome to "🤩"),
+    "平静" to (Icons.Outlined.SentimentNeutral to "😌"),
+    "好奇" to (Icons.Outlined.Explore to "🤔"),
+    "疲惫" to (Icons.Outlined.Bedtime to "😪"),
+    "低落" to (Icons.Outlined.SentimentDissatisfied to "😔"),
+    "焦虑" to (Icons.Outlined.SentimentVeryDissatisfied to "😰"),
+    "烦躁" to (Icons.Outlined.MoodBad to "😤"),
+    "生气" to (Icons.Outlined.Whatshot to "😠"),
+    "难受" to (Icons.Outlined.Healing to "😣"),
+)
+
+private fun moodFace(word: String): Pair<ImageVector, String> = MOOD_FACES[word] ?: when (MoodTier.of(word)) {
+    MoodTier.BRIGHT -> Icons.Outlined.SentimentSatisfiedAlt to "😊"
+    MoodTier.DIM -> Icons.Outlined.SentimentDissatisfied to "😔"
+    MoodTier.PLAIN -> Icons.Outlined.SentimentNeutral to "😌"
 }
+
+/** One line icon per mood word; the tier gives its colour. */
+internal fun moodIcon(word: String): ImageVector = moodFace(word).first
+
+/** A mood word as an emoji, for the mood page (the timeline keeps [moodIcon]'s quiet line icons). */
+internal fun moodEmoji(word: String): String = moodFace(word).second
+
+/** A day's face: its most frequent mood word within the day's tier (the latest on a tie). */
+internal fun MoodDay.word(): String? {
+    val t = tier ?: return null
+    return notes.filter { it.mood != null && it.tier == t }
+        .sortedBy { it.atMs }
+        .groupingBy { it.mood!! }.eachCount()
+        .entries.maxByOrNull { it.value }?.key
+}
+
 
 /**
  * A murmur's mood after its time — "09:30 · ☺" — a small line icon in its
@@ -147,7 +162,7 @@ internal fun MoodWord(word: String, onClick: () -> Unit) {
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-internal fun MoodPicker(current: String?, onPick: (String) -> Unit) {
+internal fun MoodPicker(current: String?, emoji: Boolean = false, onPick: (String) -> Unit) {
     Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
         for (t in MoodTier.entries) {
             FlowRow(Modifier.padding(bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -160,7 +175,8 @@ internal fun MoodPicker(current: String?, onPick: (String) -> Unit) {
                             .padding(start = 9.dp, end = 12.dp, top = 5.dp, bottom = 5.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Icon(moodIcon(w), contentDescription = null, tint = if (on) MaterialTheme.colorScheme.onSurface else t.ink(), modifier = Modifier.size(15.dp))
+                        if (emoji) Text(moodEmoji(w), fontSize = 15.sp)
+                        else Icon(moodIcon(w), contentDescription = null, tint = if (on) MaterialTheme.colorScheme.onSurface else t.ink(), modifier = Modifier.size(15.dp))
                         Text(
                             w,
                             fontSize = 13.sp,
@@ -176,8 +192,8 @@ internal fun MoodPicker(current: String?, onPick: (String) -> Unit) {
 }
 
 /**
- * The mood month (§19.2): a soft round tint behind each day that has one,
- * plain numbers otherwise. Tap a day for its murmurs; tap a murmur's word
+ * The mood month (§19.2): each day that has a mood shows its face (emoji)
+ * on the tier's soft tint, the date small beneath; plain numbers otherwise. Tap a day for its murmurs; tap a murmur's word
  * to change it — the user's word is kept in the journal and beats the model's.
  */
 @Composable
@@ -269,26 +285,35 @@ private fun MonthGrid(month: YearMonth, days: List<MoodDay>, today: LocalDate, s
         Row(Modifier.fillMaxWidth()) {
             for (i in 0 until 7) {
                 val date = week.getOrNull(i)
-                Box(Modifier.weight(1f).aspectRatio(1f).padding(5.dp), contentAlignment = Alignment.Center) {
+                Column(Modifier.weight(1f).padding(vertical = 3.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                     if (date != null) {
-                        val tier = byDate[date]?.tier
+                        val day = byDate[date]
+                        val tier = day?.tier
+                        val word = day?.word()
                         val future = date.isAfter(today)
-                        var m = Modifier.fillMaxSize().clip(CircleShape)
-                        if (tier != null) m = m.background(tier.soft(0.32f))
+                        // A day with a mood: its face on the tier's tint, the date small beneath.
+                        // Without: just the date, where the face would be.
+                        var m = Modifier.padding(horizontal = 3.dp).fillMaxWidth().aspectRatio(1f).clip(CircleShape)
+                        if (tier != null) m = m.background(tier.soft(0.28f))
                         if (date == selected) m = m.border(1.5.dp, tier?.ink() ?: MaterialTheme.colorScheme.outline, CircleShape)
                         if (!future) m = m.clickable { onSelect(date) }
-                        Box(m, contentAlignment = Alignment.Center) {
-                            Text(
-                                date.dayOfMonth.toString(),
-                                fontSize = 13.sp,
-                                fontWeight = if (date == today) FontWeight.Bold else FontWeight.Normal,
-                                color = when {
-                                    future -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
-                                    tier != null -> MaterialTheme.colorScheme.onSurface
-                                    else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f)
-                                },
-                            )
+                        val dateColor = when {
+                            future -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
+                            tier != null -> MaterialTheme.colorScheme.onSurface
+                            else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f)
                         }
+                        val bold = if (date == today) FontWeight.Bold else FontWeight.Normal
+                        Box(m, contentAlignment = Alignment.Center) {
+                            if (word != null) Text(moodEmoji(word), fontSize = 20.sp)
+                            else Text(date.dayOfMonth.toString(), fontSize = 13.sp, fontWeight = bold, color = dateColor)
+                        }
+                        Text(
+                            if (word != null) date.dayOfMonth.toString() else "",
+                            fontSize = 10.sp,
+                            fontWeight = bold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 1.dp),
+                        )
                     }
                 }
             }
@@ -312,7 +337,7 @@ private fun MoodNoteRow(n: MoodNote, picking: Boolean, onToggle: () -> Unit, onP
                     .padding(start = 6.dp, end = 8.dp, top = 2.dp, bottom = 2.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                n.mood?.let { Icon(moodIcon(it), contentDescription = null, tint = tier!!.ink(), modifier = Modifier.size(13.dp)) }
+                n.mood?.let { Text(moodEmoji(it), fontSize = 13.sp) }
                 Text(n.mood ?: "…", fontSize = 12.sp, color = tier?.ink() ?: MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 4.dp))
             }
             if (n.byUser) {
@@ -322,155 +347,63 @@ private fun MoodNoteRow(n: MoodNote, picking: Boolean, onToggle: () -> Unit, onP
         }
         Text(n.body, maxLines = 3, overflow = TextOverflow.Ellipsis, fontSize = 14.sp, lineHeight = 21.sp, modifier = Modifier.padding(top = 4.dp))
         AnimatedVisibility(picking, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
-            MoodPicker(n.mood, onPick)
+            MoodPicker(n.mood, emoji = true, onPick = onPick)
         }
     }
 }
 
 // ───────────────────────── Suggestions (§19.3) ─────────────────────────
 
-/** "今天 22:30", "明天 09:00", else "10月17日 09:00". */
-internal fun whenText(context: android.content.Context, ms: Long): String {
-    val at = Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault())
-    val hm = DateTimeFormatter.ofPattern("HH:mm").format(at)
-    val today = LocalDate.now()
-    return when (at.toLocalDate()) {
-        today -> context.getString(R.string.today_time_today, hm)
-        today.plusDays(1) -> context.getString(R.string.today_time_tomorrow, hm)
-        else -> dayLabel(at.toLocalDate()) + " " + hm
-    }
-}
+/** Suggestion cards already shown once this run: they appear without the fade from then on. */
+private val seenSuggestions = HashSet<String>()
 
-/**
- * The time a reminder rings at, picked on the spot (no dialog, as the
- * check-in reminder does): keeps the reminder's day, and a time already
- * past today moves to tomorrow.
- */
-internal fun retime(atMs: Long, hour: Int, minute: Int, nowMs: Long = System.currentTimeMillis()): Long {
-    val zone = ZoneId.systemDefault()
-    val day = Instant.ofEpochMilli(maxOf(atMs, nowMs)).atZone(zone).toLocalDate()
-    var at = day.atTime(hour, minute).atZone(zone)
-    if (!at.toInstant().isAfter(Instant.ofEpochMilli(nowMs))) at = at.plusDays(1)
-    return at.toInstant().toEpochMilli()
-}
-
-private val ReminderInk = Color(0xFFD9964F)
+/** Only a suggestion just made fades in, and only the first time it is seen. */
+private const val FRESH_MS = 10 * 60 * 1000L
 
 /**
  * A suggestion under a murmur (§19.3), in the same shape as the species
- * suggestion: a soft tinted card that fades in — what, a quiet second line,
- * one coloured action and a faint ×.
- *
- * - reminder: "吃布洛芬" / "今天 22:30 提醒你" (tap the time to change it)
- * - answer:   the question / the answer, two lines until tapped
- * - ask:      what to ask / "交给 Minis 慢慢查"
+ * suggestion: a soft tinted card — the one line Minis wrote first, the start
+ * of the rest beneath, "继续聊 ›" to carry on in that chat, and a faint ×
+ * ("不用"). It fades in once, when it is new; scrolling past or coming back
+ * to Today shows it as it is.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun MurmurSuggestionLine(
-    s: MurmurSuggestion,
-    onRemind: () -> Unit,
-    onDismiss: () -> Unit,
-    onAsk: (String) -> Unit,
-    onRetime: (Long) -> Unit,
-) {
-    val context = LocalContext.current
-    var shown by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { shown = true }
-    var open by remember(s.answer) { mutableStateOf(false) }
-    var picking by remember(s.atMs, s.state) { mutableStateOf(false) }
+internal fun MurmurSuggestionLine(s: MurmurSuggestion, onOpen: () -> Unit, onDismiss: () -> Unit) {
+    val key = s.sessionId.ifEmpty { s.hash }
+    val animate = remember(key) { key !in seenSuggestions && System.currentTimeMillis() - s.createdMs < FRESH_MS }
+    var shown by remember(key) { mutableStateOf(!animate) }
+    LaunchedEffect(key) { seenSuggestions += key; shown = true }
     val sub = MaterialTheme.colorScheme.onSurfaceVariant
-    val isReminder = s.type == MurmurSuggestion.TYPE_REMINDER || s.state == MurmurSuggestion.SCHEDULED
-    val set = s.state == MurmurSuggestion.SCHEDULED
-    val rang = set && s.atMs <= System.currentTimeMillis()
-    val accent = if (isReminder) ReminderInk else MaterialTheme.colorScheme.primary
+    val accent = MaterialTheme.colorScheme.primary
+    val opened = s.state == MurmurSuggestion.OPENED
     AnimatedVisibility(shown, enter = fadeIn(tween(350)) + slideInVertically(tween(350)) { -it / 3 }) {
-        Column(
+        Row(
             Modifier.padding(top = 8.dp).fillMaxWidth().clip(RoundedCornerShape(14.dp))
-                .background(accent.copy(alpha = if (set) 0.07f else 0.12f)),
+                .background(accent.copy(alpha = if (opened) 0.06f else 0.11f))
+                .clickable(onClick = onOpen),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("💬", fontSize = 16.sp, modifier = Modifier.padding(start = 12.dp, end = 10.dp))
+            Column(Modifier.weight(1f).padding(vertical = 9.dp)) {
+                Text(s.title, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Text(
-                    when { isReminder -> "⏰"; s.type == MurmurSuggestion.TYPE_ANSWER -> "💡"; else -> "💬" },
-                    fontSize = 16.sp,
-                    modifier = Modifier.padding(start = 12.dp, end = 10.dp),
+                    if (opened) stringResource(R.string.today_suggest_opened_sub)
+                    else s.preview.ifBlank { stringResource(R.string.today_suggest_minis_sub) },
+                    fontSize = 12.sp, color = sub, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 1.dp),
                 )
-                Column(Modifier.weight(1f).padding(vertical = 9.dp)) {
-                    val title = when {
-                        isReminder -> s.title
-                        s.type == MurmurSuggestion.TYPE_ANSWER -> s.question.ifBlank { stringResource(R.string.today_suggest_answer_title) }
-                        else -> s.prompt
-                    }
-                    Text(title, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    when {
-                        isReminder -> {
-                            val time = whenText(context, s.atMs)
-                            val line = when {
-                                rang -> stringResource(R.string.today_suggest_rang_sub, time)
-                                set -> stringResource(R.string.today_suggest_scheduled_sub, time)
-                                else -> stringResource(R.string.today_suggest_reminder_sub, time)
-                            }
-                            Text(
-                                line,
-                                fontSize = 12.sp,
-                                color = if (rang) sub else accent,
-                                modifier = Modifier.padding(top = 1.dp)
-                                    .then(if (rang) Modifier else Modifier.clip(RoundedCornerShape(4.dp)).clickable { picking = !picking }),
-                            )
-                        }
-                        s.type == MurmurSuggestion.TYPE_ANSWER -> Text(
-                            s.answer,
-                            fontSize = 13.sp,
-                            lineHeight = 19.sp,
-                            color = sub,
-                            maxLines = if (open) 12 else 2,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(top = 2.dp).clickable { open = !open },
-                        )
-                        else -> Text(stringResource(R.string.today_suggest_ask_sub), fontSize = 12.sp, color = sub, modifier = Modifier.padding(top = 1.dp))
-                    }
-                }
-                val action: Pair<String, () -> Unit>? = when {
-                    rang -> null
-                    set -> stringResource(R.string.today_cancel) to onDismiss
-                    isReminder -> stringResource(R.string.today_suggest_remind) to onRemind
-                    s.type == MurmurSuggestion.TYPE_ANSWER -> stringResource(R.string.today_suggest_follow) to { onAsk(s.answer) }
-                    else -> stringResource(R.string.today_menu_ask) to { onAsk(s.prompt) }
-                }
-                action?.let { (label, go) ->
-                    Text(
-                        label,
-                        color = if (set) sub else accent,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable(onClick = go).padding(horizontal = 8.dp, vertical = 8.dp),
-                    )
-                }
-                if (!set) {
-                    IconButton(onClick = onDismiss, modifier = Modifier.size(36.dp)) {
-                        Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.today_suggest_no), tint = sub.copy(alpha = 0.6f), modifier = Modifier.size(15.dp))
-                    }
-                } else Spacer(Modifier.width(6.dp))
             }
-            AnimatedVisibility(picking, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
-                val at = Instant.ofEpochMilli(s.atMs).atZone(ZoneId.systemDefault())
-                val state = rememberTimePickerState(initialHour = at.hour, initialMinute = at.minute, is24Hour = true)
-                Column(Modifier.fillMaxWidth().padding(start = 12.dp, end = 8.dp, bottom = 6.dp)) {
-                    TimeInput(state = state)
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                        Text(
-                            stringResource(R.string.today_cancel), fontSize = 13.sp, color = sub,
-                            modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { picking = false }.padding(horizontal = 10.dp, vertical = 8.dp),
-                        )
-                        Text(
-                            stringResource(R.string.today_save), fontSize = 13.sp, color = accent, fontWeight = FontWeight.SemiBold,
-                            modifier = Modifier.clip(RoundedCornerShape(8.dp))
-                                .clickable { picking = false; onRetime(retime(s.atMs, state.hour, state.minute)) }
-                                .padding(horizontal = 10.dp, vertical = 8.dp),
-                        )
-                    }
+            Text(
+                stringResource(R.string.today_suggest_continue) + " ›",
+                color = accent,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
+            )
+            if (!opened) {
+                IconButton(onClick = onDismiss, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.today_suggest_no), tint = sub.copy(alpha = 0.6f), modifier = Modifier.size(15.dp))
                 }
-            }
+            } else Spacer(Modifier.width(6.dp))
         }
     }
 }

@@ -1,8 +1,6 @@
 package com.openminis.app.data.murmur
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /** Cases shaped like what the model tags in real murmurs (made-up sentences, same patterns). */
@@ -27,17 +25,6 @@ class DishRulesTest {
         assertEquals(listOf("宫保鸡丁"), DishRules.dishes(listOf("宫保鸡丁"), "今天做的宫保鸡丁很成功"))
         assertEquals(listOf("绿茶", "红茶"), DishRules.dishes(listOf("绿茶", "红茶"), "下午喝了绿茶，还是红茶更合口。"))
         assertEquals(emptyList<String>(), DishRules.dishes(listOf("鸭"), "卤鸭做好了"))
-    }
-
-    @Test fun homemadeIsAboutMakingIt() {
-        assertTrue(DishRules.homemade("今天做的宫保鸡丁很成功"))
-        assertTrue(DishRules.homemade("制作了一罐泡菜，等两周看看"))
-        assertTrue(DishRules.homemade("早上的厚蛋烧出锅了"))
-        assertFalse(DishRules.homemade("隔壁飘来红烧肉的香味，好馋"))
-        assertFalse(DishRules.homemade("这家烤鸭味道很足，下次还来"))
-        assertFalse(DishRules.homemade("楼下有人在熬猪油，满楼道都香"))
-        assertFalse(DishRules.homemade("忙了一整天，好像什么都没做成，又好像做了很多事情，很累。晚上和同事去吃了烧烤", "烧烤"))
-        assertTrue(DishRules.homemade("学会一道新菜，葱姜炒蟹，先把蟹处理干净", "葱姜炒蟹"))
     }
 
     @Test fun termsAreNotFood() =

@@ -94,10 +94,12 @@ class BackgroundTaskNotifier(
                 // parent test is free, and the tracker stays a pure
                 // "is this session streaming" signal with no opinion about
                 // which sessions deserve a notification.
-                if (session?.isChild == true) {
+                // [T-today-murmur-agent] A murmur's background turn says so on the
+                // murmur itself, not with a notification.
+                if (session?.isHiddenFromLists == true) {
                     AppLogger.info(
                         TAG,
-                        "skipping completion notification for sub agent session " +
+                        "skipping completion notification for hidden session " +
                             sessionId.take(8),
                     )
                     return@launch

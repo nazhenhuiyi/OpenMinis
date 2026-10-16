@@ -62,10 +62,13 @@ object MurmurLlm {
                 }
                 AppLogger.info(TAG, "loaded in ${System.currentTimeMillis() - t0} ms")
             }
-            val res = nativeRun(handle, MurmurLabels.prompt(text), MurmurLabels.GRAMMAR, "记录", MAX_TOKENS) ?: return@withContext null
-            val nl = res.indexOf('\n')
-            val pRecord = res.substring(0, nl).toFloatOrNull() ?: return@withContext null
-            MurmurLabels.parse(res.substring(nl + 1), text.take(MurmurLabels.MAX_CHARS), 1f - pRecord)
+            val res = nativeRun(handle, MurmurLabels.prompt(text), MurmurLabels.GRAMMAR, "记录", MurmurLabels.MOODS.joinToString("\n"), MAX_TOKENS)
+                ?: return@withContext null
+            // "<P(记录)>\n<line>\n<P of each mood where the mood began>"
+            val lines = res.split('\n')
+            val pRecord = lines.getOrNull(0)?.toFloatOrNull() ?: return@withContext null
+            val moodProbs = lines.getOrNull(2).orEmpty().split(',').mapNotNull { it.toDoubleOrNull() }
+            MurmurLabels.parse(lines.getOrNull(1).orEmpty(), text.take(MurmurLabels.MAX_CHARS), 1f - pRecord, moodProbs)
         } finally {
             scheduleRelease()
         }
@@ -84,6 +87,6 @@ object MurmurLlm {
     }
 
     @JvmStatic private external fun nativeLoad(path: String, threads: Int, nCtx: Int): Long
-    @JvmStatic private external fun nativeRun(handle: Long, prompt: String, grammar: String, probe: String, maxTokens: Int): String?
+    @JvmStatic private external fun nativeRun(handle: Long, prompt: String, grammar: String, probe: String, field: String, maxTokens: Int): String?
     @JvmStatic private external fun nativeFree(handle: Long)
 }

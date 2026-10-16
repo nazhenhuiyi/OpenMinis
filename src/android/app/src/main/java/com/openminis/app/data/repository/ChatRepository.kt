@@ -302,6 +302,8 @@ class ChatRepository(internal val dao: ChatDao) {
         var dropped = 0
         val out = ArrayList<SessionSearchResult>(rows.size)
         for (row in rows) {
+            // [T-today-murmur-agent] Not opened yet: not findable either.
+            if (row.session.isMurmurPending) continue
             val titleMatched = row.session.title?.contains(q, ignoreCase = true) == true
             var snippet = row.hitPartsJson?.let { SessionSearch.searchSnippet(it, q) }
             if (snippet == null && row.hitPartsJson != null && lookbackBudget > 0) {

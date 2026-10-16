@@ -83,4 +83,19 @@ data class ChatSessionEntity(
     @ColumnInfo(name = "parent_tool_use_id") val parentToolUseId: String? = null,
 ) {
     val isChild: Boolean get() = parentSessionId != null
+
+    /**
+     * [T-today-murmur-agent] Started by Today in the background on a murmur and
+     * not opened yet: kept out of every list until the user taps it (then its
+     * source becomes [SOURCE_MURMUR]); deleted if never opened.
+     */
+    val isMurmurPending: Boolean get() = source == SOURCE_MURMUR_PENDING
+
+    /** Not shown in session lists and pickers: sub agent children and murmur chats not opened yet. */
+    val isHiddenFromLists: Boolean get() = isChild || isMurmurPending
+
+    companion object {
+        const val SOURCE_MURMUR_PENDING = "murmur_pending"
+        const val SOURCE_MURMUR = "murmur"
+    }
 }

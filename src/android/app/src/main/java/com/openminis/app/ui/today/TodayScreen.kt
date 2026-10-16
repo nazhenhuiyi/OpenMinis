@@ -164,10 +164,13 @@ private sealed interface Target {
 fun TodayScreen(
     onAskMinis: (text: String, photoUris: List<String>) -> Unit,
     modifier: Modifier = Modifier,
+    /** Open an existing chat — one Minis prepared on a murmur (§19.3). */
+    onOpenChat: (sessionId: String) -> Unit = {},
     vm: TodayViewModel = viewModel(),
 ) {
     val context = LocalContext.current
     val state by vm.state.collectAsState()
+    val murmurWorking by vm.murmurWorking.collectAsState()
     val draft by vm.draft.collectAsState()
     val scope = rememberCoroutineScope()
     val clipboard = LocalClipboardManager.current
@@ -298,12 +301,7 @@ fun TodayScreen(
     val undoLabel = stringResource(R.string.today_undo)
     val dismissedText = stringResource(R.string.today_species_dismissed)
     val removedText = stringResource(R.string.today_species_removed)
-    val offerUndo: (String, () -> Unit) -> Unit = { text, undo ->
-        scope.launch {
-            snackbar.currentSnackbarData?.dismiss()
-            if (snackbar.showSnackbar(text, actionLabel = undoLabel, duration = SnackbarDuration.Short) == SnackbarResult.ActionPerformed) undo()
-        }
-    }
+    val offerUndo: (String, () -> Unit) -> Unit = { text, undo -> scope.offerUndo(snackbar, text, undoLabel, undo) }
 
     LaunchedEffect(state.speciesReady) { if (state.speciesReady) vm.warmUpSpecies() }
 
@@ -423,31 +421,14 @@ fun TodayScreen(
                                 tags = state.tags,
                                 onCancelEdit = { editingId = null; editPhotos = null },
                                 suggestion = row.note.entry.id?.let { state.murmurSuggestions[it] },
-                                // Every action says what happened and can be taken back (§19.3).
-                                onRemind = {
-                                    val s = row.note.entry.id?.let { state.murmurSuggestions[it] }
-                                    vm.acceptReminder(row.note)?.let { undo ->
-                                        haptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                                        offerUndo(context.getString(R.string.today_suggest_set_snack, s?.let { whenText(context, it.atMs) }.orEmpty()), undo)
-                                    }
-                                },
+                                minisWorking = state.smartSuggest && row.note.entry.id != null && row.note.entry.id == murmurWorking,
+                                // Opening it carries on in the chat Minis prepared; "不用" can be taken back (§19.3).
+                                onOpenSuggestion = { scope.launch { vm.openMurmurChat(row.note)?.let(onOpenChat) } },
                                 onDismissSuggestion = {
-                                    val wasSet = row.note.entry.id?.let { state.murmurSuggestions[it] }?.state ==
-                                        com.openminis.app.data.murmur.MurmurSuggestion.SCHEDULED
-                                    vm.dismissMurmurSuggestion(row.note)?.let { undo ->
-                                        offerUndo(context.getString(if (wasSet) R.string.today_suggest_cancelled else R.string.today_suggest_dismissed), undo)
-                                    }
+                                    vm.dismissMurmurSuggestion(row.note)?.let { undo -> offerUndo(context.getString(R.string.today_suggest_dismissed), undo) }
                                 },
-                                onRetime = { ms -> vm.setReminderTime(row.note, ms) },
                                 moodWord = row.note.entry.id?.let { state.noteMood[it] },
                                 onSetMood = { w -> row.note.entry.id?.let { vm.setNoteMood(row.note.date, it, w) } },
-                                onAskSuggestion = { extra ->
-                                    val s = row.note.entry.id?.let { state.murmurSuggestions[it] }
-                                    val (text, uris) = askPayload(context, Target.Note(row.note), zone)
-                                    val more = if (s?.type == com.openminis.app.data.murmur.MurmurSuggestion.TYPE_ANSWER)
-                                        context.getString(R.string.today_suggest_follow_text, extra) else extra
-                                    onAskMinis(text + more, uris)
-                                },
                             )
                             is TodayRow.Group -> {
                                 // One suggestion per kind found in the group, its photos together (§17.2).
@@ -937,10 +918,9 @@ private fun NoteRow(
     onSpecies: (String) -> Unit,
     tags: Map<String, com.openminis.app.data.species.PhotoTag> = emptyMap(),
     suggestion: com.openminis.app.data.murmur.MurmurSuggestion? = null,
-    onRemind: () -> Unit = {},
+    minisWorking: Boolean = false,
+    onOpenSuggestion: () -> Unit = {},
     onDismissSuggestion: () -> Unit = {},
-    onAskSuggestion: (String) -> Unit = {},
-    onRetime: (Long) -> Unit = {},
     moodWord: String? = null,
     onSetMood: (String) -> Unit = {},
 ) {
@@ -999,7 +979,16 @@ private fun NoteRow(
             enter = androidx.compose.animation.fadeIn() + androidx.compose.animation.expandVertically(),
             exit = androidx.compose.animation.fadeOut() + androidx.compose.animation.shrinkVertically(),
         ) { MoodPicker(moodWord) { w -> pickingMood = false; onSetMood(w) } }
-        suggestion?.let { MurmurSuggestionLine(it, onRemind = onRemind, onDismiss = onDismissSuggestion, onAsk = onAskSuggestion, onRetime = onRetime) }
+        when {
+            suggestion != null -> MurmurSuggestionLine(suggestion, onOpen = onOpenSuggestion, onDismiss = onDismissSuggestion)
+            // Minis is on it in the background: one quiet line, so a wait of a minute does not look like nothing.
+            minisWorking -> Text(
+                stringResource(R.string.today_suggest_working),
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                modifier = Modifier.padding(top = 6.dp),
+            )
+        }
     }
 }
 

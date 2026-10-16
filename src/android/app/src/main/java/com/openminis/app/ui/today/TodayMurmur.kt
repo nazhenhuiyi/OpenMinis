@@ -6,17 +6,17 @@ import com.openminis.app.data.journal.JournalEntry
 import com.openminis.app.data.journal.JournalStore
 import com.openminis.app.data.murmur.DishRules
 import com.openminis.app.data.murmur.MoodTier
-import com.openminis.app.data.murmur.MurmurCloud
+import com.openminis.app.data.murmur.MurmurAgent
 import com.openminis.app.data.murmur.MurmurIndex
 import com.openminis.app.data.murmur.MurmurLabels
 import com.openminis.app.data.murmur.MurmurLlm
-import com.openminis.app.data.murmur.MurmurReminder
 import com.openminis.app.data.murmur.MurmurSuggestion
-import com.openminis.app.logging.AppLogger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.time.Instant
@@ -41,11 +41,9 @@ data class FoodNote(
     val atMs: Long,
     val body: String,
     val photos: List<String>,
-    /** Dish names, each with whether the murmur is about making it. */
-    val dishes: List<Pair<String, Boolean>>,
-) {
-    val homemade: Boolean get() = dishes.any { it.second }
-}
+    /** The dishes it names, cleaned of ingredients ([DishRules]). */
+    val dishes: List<String>,
+)
 
 /**
  * [T-today-murmur] Today's side of the 碎碎念 model (SPEC §19): tags the
@@ -66,6 +64,14 @@ internal class TodayMurmur(
     private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     private val zone: ZoneId get() = ZoneId.systemDefault()
     private var job: Job? = null
+    /** Minis working on murmurs in the background (§19.3), one at a time. */
+    private var agentJob: Job? = null
+    private val _working = MutableStateFlow<String?>(null)
+    /** The murmur Minis is looking at right now, if any: "Minis 正在看这条…" under it. */
+    val working: StateFlow<String?> = _working
+    /** The day old background chats were last cleared out, and whether all were (智能建议 off): once each, not every pass. */
+    private var clearedOn: LocalDate? = null
+    private var clearedAll = false
     private var pending: List<TodayDay>? = null
     private var lastDays: List<TodayDay> = emptyList()
     private var retryJob: Job? = null
@@ -109,7 +115,9 @@ internal class TodayMurmur(
         // Newest first: the note just sent is coloured before last week's.
         for (n in notesOf(days).sortedByDescending { it.atMs }) {
             val id = n.entry.id!!
-            if (index.tags(id, n.entry.body) != null) continue
+            // Tagged — unless mood colours are on and the tag predates mood confidence: redo it, once.
+            val have = index.tags(id, n.entry.body)
+            if (have != null && (have.moodConf != null || !moodColors)) continue
             // Just written or edited: wait — it is often changed again right away (§19.1).
             val touched = (n.entry.edited ?: n.entry.at)?.toInstant()?.toEpochMilli() ?: 0L
             if (now - touched < SETTLE_MS) { settling = true; continue }
@@ -120,25 +128,73 @@ internal class TodayMurmur(
             publishFor(days)
         }
         if (smartSuggest) suggest(days)
+        else if (!clearedAll && agentJob?.isActive != true) { clearedAll = true; agentJob = scope.launch { clearOldChats(all = true) } }
         if (settling) {
             retryJob?.cancel()
             retryJob = scope.launch { delay(SETTLE_MS); reload() }
         }
     }
 
-    /** §19.3: candidates from the last day only, once each, written by the user. */
-    private suspend fun suggest(days: List<TodayDay>) {
+    /**
+     * §19.3: murmurs from the last day that pass the sift go to Minis, one at a
+     * time, in their own job — a background chat can take minutes and must not
+     * hold up tagging. Each is judged once (again only if an older brief judged
+     * it and the user left it alone). Chats never opened are cleared out the next day.
+     */
+    private fun suggest(days: List<TodayDay>) {
+        clearedAll = false
+        if (agentJob?.isActive == true) return
         val since = System.currentTimeMillis() - SUGGEST_WINDOW_MS
-        for (n in notesOf(days).filter { it.atMs >= since && !it.entry.writtenByMinis }.sortedByDescending { it.atMs }) {
+        val todo = notesOf(days).filter { it.atMs >= since && !it.entry.writtenByMinis }.sortedByDescending { it.atMs }.filter { n ->
             val id = n.entry.id!!
             val body = n.entry.body
-            val tags = index.tags(id, body) ?: continue
-            if (index.suggestion(id, body) != null || !asked.add(id + MurmurIndex.hash(body))) continue
-            if (!MurmurLabels.isCandidate(body, tags)) continue
-            val s = MurmurCloud.ask(context, body, n.atMs, MurmurIndex.hash(body)) ?: continue
-            withContext(Dispatchers.IO) { index.putSuggestion(id, s) }
-            publishFor(days)
+            val tags = index.tags(id, body) ?: return@filter false
+            val had = index.suggestion(id, body)
+            // Judged before — unless by an older brief and left untouched ("none", or an offer never answered): once more.
+            val redo = had != null && had.promptVersion < MurmurAgent.BRIEF_VERSION &&
+                (had.state == MurmurSuggestion.NONE || had.state == MurmurSuggestion.OFFER)
+            if (had != null && !redo) return@filter false
+            MurmurLabels.isCandidate(body, tags) && asked.add(id + MurmurIndex.hash(body))
         }
+        val today = LocalDate.now(zone)
+        val clear = clearedOn != today
+        if (todo.isEmpty() && !clear) return
+        agentJob = scope.launch {
+            if (clear) { clearOldChats(); clearedOn = today }
+            for (n in todo) {
+                val id = n.entry.id!!
+                // Redone, or the murmur was edited since: the chat from before goes first (any text, so none is left behind).
+                // A chat the user opened is theirs now and stays.
+                index.rawSuggestion(id)?.takeIf { it.sessionId.isNotBlank() && it.state != MurmurSuggestion.OPENED }?.let { old ->
+                    runCatching { MurmurAgent.discard(context, old.sessionId) }
+                    withContext(Dispatchers.IO) { index.putSuggestion(id, old.copy(sessionId = "")) }
+                }
+                _working.value = id
+                val s = try {
+                    MurmurAgent.prepare(context, n.entry.body, n.atMs, MurmurIndex.hash(n.entry.body))
+                } finally {
+                    _working.value = null
+                }
+                if (s != null) withContext(Dispatchers.IO) { index.putSuggestion(id, s) }
+                publishFor(lastDays)
+            }
+        }
+    }
+
+    /**
+     * Background chats never opened, for offers no longer shown (not today's) —
+     * or, [all], every one (智能建议 turned off): deleted.
+     */
+    private suspend fun clearOldChats(all: Boolean = false) {
+        val today = LocalDate.now(zone)
+        val cleared = HashMap<String, MurmurSuggestion>()
+        for ((id, s) in index.allSuggestions()) {
+            if (s.sessionId.isBlank() || s.state == MurmurSuggestion.OPENED) continue
+            if (!all && !Instant.ofEpochMilli(s.createdMs).atZone(zone).toLocalDate().isBefore(today)) continue
+            runCatching { MurmurAgent.discard(context, s.sessionId) }
+            cleared[id] = s.copy(sessionId = "")
+        }
+        withContext(Dispatchers.IO) { index.putSuggestions(cleared) }
     }
 
     private fun publishFor(days: List<TodayDay>) {
@@ -150,15 +206,15 @@ internal class TodayMurmur(
         publish(dayMood, noteMood, visibleSuggestions(days))
     }
 
-    /** The user's own word first (§19.2), else the model's. */
-    private fun moodOf(e: JournalEntry): String? = userMood(e) ?: e.id?.let { index.tags(it, e.body)?.mood }
+    /** The user's own word first (§19.2), else the model's — only when it is sure of it. */
+    private fun moodOf(e: JournalEntry): String? = userMood(e) ?: e.id?.let { index.tags(it, e.body)?.shownMood }
 
     /** `mood=` as written by the user: one of the mood words (older builds wrote 明亮/平常/低沉). */
     private fun userMood(e: JournalEntry): String? = e.attrs[MOOD_ATTR]?.takeIf { it in MurmurLabels.MOODS || MoodTier.fromLabel(it) != null }
 
     /**
-     * What shows under murmurs: reminders set, and today's open offers — at
-     * most [MAX_OFFERS_A_DAY], newest kept. Yesterday's unanswered ones fade.
+     * What shows under murmurs: today's offers from Minis, open or already
+     * opened — at most [MAX_OFFERS_A_DAY], newest kept. Yesterday's fade.
      */
     private fun visibleSuggestions(days: List<TodayDay>): Map<String, MurmurSuggestion> {
         if (!smartSuggest) return emptyMap()
@@ -168,11 +224,8 @@ internal class TodayMurmur(
         for (n in notesOf(days)) {
             val id = n.entry.id!!
             val s = index.suggestion(id, n.entry.body) ?: continue
-            when {
-                // Shown until the end of the day it rings on ("已提醒" once past), then it goes quietly.
-                s.state == MurmurSuggestion.SCHEDULED && !Instant.ofEpochMilli(s.atMs).atZone(zone).toLocalDate().isBefore(today) -> out[id] = s
-                s.state == MurmurSuggestion.OFFER && Instant.ofEpochMilli(s.createdMs).atZone(zone).toLocalDate() == today -> offers += id to s
-            }
+            val live = s.state == MurmurSuggestion.OFFER || s.state == MurmurSuggestion.OPENED
+            if (live && s.sessionId.isNotBlank() && Instant.ofEpochMilli(s.createdMs).atZone(zone).toLocalDate() == today) offers += id to s
         }
         offers.sortedByDescending { it.second.createdMs }.take(MAX_OFFERS_A_DAY).forEach { (id, s) -> out[id] = s }
         return out
@@ -184,33 +237,27 @@ internal class TodayMurmur(
     private fun update(note: TodayNote, change: (MurmurSuggestion) -> MurmurSuggestion): MurmurSuggestion? {
         val id = note.entry.id ?: return null
         val s = index.suggestion(id, note.entry.body) ?: return null
-        val next = change(s)
-        index.putSuggestion(id, next)
-        syncAlarm(id, next)
+        index.putSuggestion(id, change(s))
         publishFor(lastDays)
         return s
     }
 
-    /** The alarm always follows the stored state: set while SCHEDULED, gone otherwise. */
-    private fun syncAlarm(id: String, s: MurmurSuggestion) {
-        if (s.state == MurmurSuggestion.SCHEDULED) MurmurReminder.schedule(context, id, s.atMs) else MurmurReminder.cancel(context, id)
+    /** Tapped: the chat joins the session list; returns it to open. */
+    suspend fun open(note: TodayNote): String? {
+        val sid = update(note) { it.copy(state = MurmurSuggestion.OPENED) }?.sessionId?.takeIf { it.isNotBlank() } ?: return null
+        MurmurAgent.open(context, sid)
+        return sid
     }
 
-    fun acceptReminder(note: TodayNote): MurmurSuggestion? =
-        update(note) { it.copy(state = MurmurSuggestion.SCHEDULED) }.also { if (it != null) AppLogger.info(TAG, "reminder set") }
-
-    /** A new time for an offered or set reminder (the cloud's guess is only a guess). */
-    fun setReminderTime(note: TodayNote, atMs: Long): MurmurSuggestion? = update(note) { it.copy(atMs = atMs) }
-
-    /** "不用", or cancelling a reminder that was set. Undo puts it back as it was. */
+    /** "不用" (×). Undo puts it back; the chat itself goes with the next day's clear-out. */
     fun dismiss(note: TodayNote): MurmurSuggestion? = update(note) { it.copy(state = MurmurSuggestion.DISMISSED) }
 
     fun restore(note: TodayNote, previous: MurmurSuggestion) {
         update(note) { previous }
     }
 
-    /** Whether any model can take the cloud's second look; without one the switch says so (§19.3). */
-    fun cloudAvailable(): Boolean = MurmurCloud.hasModel(context)
+    /** Whether Minis has a model to work with; without one the switch says so (§19.3). */
+    fun cloudAvailable(): Boolean = MurmurAgent.hasModel(context)
 
     /** The one-time "the dot is the day's mood" hint (first time colours appear). */
     var moodHintShown: Boolean
@@ -228,8 +275,10 @@ internal class TodayMurmur(
                 .filter { it.id != null && it.body.isNotBlank() && !CheckIns.isCheckIn(it) }
             val notes = entries.map { e ->
                 val user = userMood(e)
-                if (user == null && index.tags(e.id!!, e.body) == null) untagged += e
-                MoodNote(e.id!!, date, e.at?.toInstant()?.toEpochMilli() ?: 0L, e.body, user ?: index.tags(e.id!!, e.body)?.mood, user != null)
+                val tags = index.tags(e.id!!, e.body)
+                if (user == null && (tags == null || (moodColors && tags.moodConf == null))) untagged += e
+                // Not sure enough of the model's mood: left uncoloured, still settable.
+                MoodNote(e.id!!, date, e.at?.toInstant()?.toEpochMilli() ?: 0L, e.body, user ?: tags?.shownMood, user != null)
             }
             days += MoodDay(date, MoodTier.ofDay(notes.mapNotNull { it.tier }), notes)
         }
@@ -239,7 +288,7 @@ internal class TodayMurmur(
 
     private var lastMonthUntagged: List<JournalEntry> = emptyList()
 
-    /** Older murmurs the timeline never loaded: tag them while the page is open. */
+    /** Older murmurs the timeline never loaded (or tagged before mood confidence): tag them while the page is open. */
     suspend fun tagMonthBacklog(onEach: () -> Unit) {
         if (!ready) return
         for (e in lastMonthUntagged) {
@@ -273,10 +322,9 @@ internal class TodayMurmur(
                 if (tags == null) { untagged += e; continue }
                 val names = DishRules.dishes(tags.mentions.filter { it.first == "吃喝" }.map { it.second }, e.body)
                 if (names.isEmpty() && tags.aspects.firstOrNull() != "吃喝") continue
-                val dishes = names.map { it to DishRules.homemade(e.body, it) }
                 out += FoodNote(
                     e.id!!, date, e.at?.toInstant()?.toEpochMilli() ?: date.atStartOfDay(zone).toInstant().toEpochMilli(),
-                    e.body, e.photos, dishes,
+                    e.body, e.photos, names,
                 )
             }
         }
@@ -300,7 +348,6 @@ internal class TodayMurmur(
     }
 
     companion object {
-        private const val TAG = "TodayMurmur"
         private const val PREFS = "today_murmur"
         private const val KEY_MOOD = "moodColors"
         private const val KEY_SUGGEST = "smartSuggest"

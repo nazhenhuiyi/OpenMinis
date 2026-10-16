@@ -51,6 +51,9 @@ data class JournalEntry(
         const val KEY_BY = "by"
         const val KEY_SPECIES = "species"
         const val KEY_SPECIES_NAME = "species_name"
+        /** [T-today-explore] What became of a wish in the entry (done / dropped) and the day it came true. */
+        const val KEY_WISH = "wish"
+        const val KEY_WISH_ON = "wish_on"
         const val BY_MINIS = "minis"
 
         fun create(id: String, at: OffsetDateTime, body: String, photos: List<String> = emptyList()): JournalEntry {

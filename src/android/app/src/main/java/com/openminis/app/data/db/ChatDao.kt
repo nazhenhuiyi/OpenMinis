@@ -90,7 +90,8 @@ interface ChatDao {
      * limit counts only rows that can actually be shown.
      */
     @Query(
-        "SELECT * FROM sessions WHERE parent_session_id IS NULL AND id != :excludeId " +
+        // [T-today-murmur-agent] Nor murmur chats not opened yet (ChatSessionEntity.isHiddenFromLists).
+        "SELECT * FROM sessions WHERE parent_session_id IS NULL AND (source IS NULL OR source != 'murmur_pending') AND id != :excludeId " +
             "ORDER BY updated_at DESC LIMIT :limit",
     )
     suspend fun listRecentMovableSessions(
@@ -336,6 +337,18 @@ interface ChatDao {
         ORDER BY sort_order DESC LIMIT 1
     """)
     suspend fun lastMessageParts(sessionId: String): String?
+
+    /** [T-today-murmur-agent] The last assistant message's parts: a background run's reply, without loading the transcript. */
+    @Query("""
+        SELECT parts_json FROM messages
+        WHERE session_id = :sessionId AND role = 'assistant'
+        ORDER BY sort_order DESC LIMIT 1
+    """)
+    suspend fun lastAssistantParts(sessionId: String): String?
+
+    /** [T-today-murmur-agent] Murmur chats never opened and untouched since [olderThanMs]: swept at cold start. */
+    @Query("SELECT id FROM sessions WHERE source = 'murmur_pending' AND updated_at < :olderThanMs")
+    suspend fun staleMurmurPendingIds(olderThanMs: Long): List<String>
 
     /**
      * [T-android-session-paused-badge-hardkill] The last message (role +

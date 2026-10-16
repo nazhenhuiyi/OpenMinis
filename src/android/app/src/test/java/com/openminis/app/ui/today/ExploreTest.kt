@@ -68,12 +68,36 @@ class ExploreTest {
             CollectedSpecies("L$i", "种$i", null, null, i, listOf(SpeciesRecord(ms(10L + i), "", null, emptyList())))
         }
         val food = listOf(
-            FoodNote("f1", d, ms(0), "做了宫保虾球", listOf("DCIM/a.jpg"), listOf("宫保虾球" to true)),
-            FoodNote("f2", d, ms(1), "又做了宫保虾球", emptyList(), listOf("宫保虾球" to true)),
-            FoodNote("f3", d, ms(2), "吃了猪猪面", emptyList(), listOf("猪猪面" to false)),
+            FoodNote("f1", d, ms(0), "做了宫保鸡丁", listOf("DCIM/a.jpg"), listOf("宫保鸡丁")),
+            FoodNote("f2", d, ms(1), "又做了宫保鸡丁", emptyList(), listOf("宫保鸡丁")),
+            FoodNote("f3", d, ms(2), "吃了牛肉面", emptyList(), listOf("牛肉面")),
         )
         val f = Explore.firsts(species, food)
-        assertEquals(listOf("种6", "种5", "种4", "种3", "宫保虾球"), f.map { it.name })
+        // Each dish once, from the first murmur naming it.
+        assertEquals(listOf("种6", "种5", "种4", "种3", "牛肉面", "宫保鸡丁"), f.map { it.name })
         assertEquals("DCIM/a.jpg", f.last().photo)
+        assertEquals("f1", f.last().noteId)
+    }
+
+    @Test fun wishesAreWhatYouWouldLikeToDo() {
+        val d = LocalDate.of(2026, 9, 1)
+        fun w(body: String) = Explore.wishIn(note("x", d, body = body))?.text
+        assertEquals("看完纪录片，好想去莫高窟看看", w("看完纪录片，好想去莫高窟看看。下次吧"))
+        assertEquals("买了一套器具，其实很想学做手冲咖啡呢", w("买了一套器具，其实很想学做手冲咖啡呢～"))
+        assertEquals("有机会试试", w("读到一篇讲口蘑的文章。有机会试试"))
+        // Musing, not wishing.
+        assertEquals(null, w("想做点什么才好呢，一时没主意"))
+        // Already done.
+        assertEquals(null, w("想喝粥，于是煮了一锅"))
+        assertEquals(null, w("今天的晚霞好好看"))
+    }
+
+    @Test fun wishesNewestFirstAndTheirFate() {
+        val a = note("a", LocalDate.of(2026, 8, 1), body = "想去动物园")
+        val b = note("b", LocalDate.of(2026, 9, 1), body = "想学做咖啡").copy(wish = Explore.WISH_DONE)
+        val ws = Explore.wishes(listOf(a, b))
+        assertEquals(listOf("b", "a"), ws.map { it.note.id })
+        assertTrue(ws[0].done && !ws[0].open)
+        assertTrue(ws[1].open)
     }
 }

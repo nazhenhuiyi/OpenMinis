@@ -2,15 +2,11 @@ package com.openminis.app.ui.today
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -37,7 +33,6 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.openminis.app.R
@@ -49,20 +44,15 @@ import kotlinx.coroutines.flow.MutableStateFlow
 // [T-today-murmur] 我的菜单 (SPEC §19.6): the murmurs about food, as they
 // were written — the murmur is the thing, the dishes it names sit under it.
 
-/** The kitchen's colour: made-at-home dishes here and on 探索. */
+/** The colour of food: dish names here and the 吃喝 parts of 探索. */
 internal val Kitchen = Color(0xFFC98A4B)
 
 /** Open 我的菜单 on one murmur ([noteId]) and the dish in it that was tapped. */
 data class DishFocus(val noteId: String, val dish: String)
 
-/** How many dishes were made, and how many tasted (made ones included): "做过 12 道 · 吃到 30 种". */
-fun List<FoodNote>.dishCounts(): Pair<Int, Int> =
-    flatMap { n -> n.dishes.filter { it.second }.map { it.first } }.toSet().size to
-        flatMap { n -> n.dishes.map { it.first } }.toSet().size
-
 /**
- * The menu page: "做过 16 道 · 吃到 31 种", a filter (自己做的 / 全部), then the
- * food murmurs newest first, each with its words, photos and dish names.
+ * The menu page: "42 条和吃喝有关的碎碎念", then those murmurs newest first,
+ * each with its words, photos and the dishes it names.
  * Murmurs never tagged are read while the page is open, so the feed fills in.
  */
 @Composable
@@ -71,7 +61,6 @@ internal fun DishesPage(vm: TodayViewModel, focus: DishFocus? = null, initial: L
     var notes by remember { mutableStateOf(initial) }
     var photos by remember { mutableStateOf<Map<String, CameraPhoto>>(emptyMap()) }
     val gone = remember { HashSet<String>() }
-    var homemadeOnly by remember { mutableStateOf(false) }
     var progress by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     var viewer by remember { mutableStateOf<Pair<List<CameraPhoto>, Int>?>(null) }
     val listState = rememberLazyListState()
@@ -104,9 +93,7 @@ internal fun DishesPage(vm: TodayViewModel, focus: DishFocus? = null, initial: L
         refreshes.value++
     }
 
-    val all = notes.orEmpty()
-    val shown = remember(all, homemadeOnly) { if (homemadeOnly) all.filter { it.homemade } else all }
-    val (made, tasted) = remember(all) { all.dishCounts() }
+    val shown = notes.orEmpty()
     val density = LocalDensity.current
     // Once the list is there: scroll so the focused murmur sits a little below the top, then glow.
     LaunchedEffect(notes != null) {
@@ -121,11 +108,7 @@ internal fun DishesPage(vm: TodayViewModel, focus: DishFocus? = null, initial: L
 
     FullScreenPage(onDismiss, header = { PageTitle(stringResource(R.string.today_dishes_title)) }) {
         Column(Modifier.padding(horizontal = 20.dp)) {
-            Text(stringResource(R.string.today_dishes_summary, made, tasted), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Row(Modifier.padding(top = 12.dp, bottom = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Pill(stringResource(R.string.today_dishes_all), !homemadeOnly) { homemadeOnly = false }
-                Pill(stringResource(R.string.today_dishes_homemade), homemadeOnly) { homemadeOnly = true }
-            }
+            if (shown.isNotEmpty()) Text(stringResource(R.string.today_dishes_count, shown.size), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             progress?.let { (done, total) -> MetaText(stringResource(R.string.today_dishes_reading, done, total)) }
         }
         if (notes != null && shown.isEmpty() && progress == null) {
@@ -152,17 +135,6 @@ internal fun DishesPage(vm: TodayViewModel, focus: DishFocus? = null, initial: L
         }
     }
     viewer?.let { (list, start) -> PhotoViewer(list, start, ZoneId.systemDefault(), onDismiss = { viewer = null }) }
-}
-
-@Composable
-private fun Pill(label: String, selected: Boolean, onClick: () -> Unit) {
-    Box(
-        Modifier.clip(RoundedCornerShape(50))
-            .background(if (selected) Kitchen.copy(alpha = 0.22f) else MaterialTheme.colorScheme.surfaceContainerHigh)
-            .clickable(onClick = onClick).padding(horizontal = 14.dp, vertical = 7.dp),
-    ) {
-        Text(label, fontSize = 13.sp, color = if (selected) Kitchen else MaterialTheme.colorScheme.onSurface, fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal)
-    }
 }
 
 /**
@@ -202,16 +174,15 @@ private fun FoodNoteRow(
         }
         if (n.dishes.isNotEmpty()) {
             FlowRow(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                for ((name, made) in n.dishes) {
-                    val base = if (made) Kitchen.copy(alpha = 0.14f) else MaterialTheme.colorScheme.surfaceContainerHigh
+                for (name in n.dishes) {
                     val lit = glow.takeIf { name == glowDish }
                     Text(
-                        (if (made) "🍳 " else "") + name,
+                        name,
                         fontSize = 12.sp,
-                        color = if (made) Kitchen else MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = Kitchen,
                         modifier = Modifier.clip(RoundedCornerShape(10.dp))
                             .drawBehind {
-                                drawRect(base)
+                                drawRect(Kitchen.copy(alpha = 0.12f))
                                 lit?.invoke()?.takeIf { it > 0f }?.let { drawRect(Kitchen.copy(alpha = 0.22f * it)) }
                             }
                             .padding(horizontal = 9.dp, vertical = 3.dp),

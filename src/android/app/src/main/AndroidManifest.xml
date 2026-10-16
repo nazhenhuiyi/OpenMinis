@@ -540,11 +540,6 @@
             android:name=".notification.HabitReminder$Receiver"
             android:exported="false" />
 
-        <!-- [T-today-murmur] One-off reminders accepted under a murmur (Today SPEC §19.3). -->
-        <receiver
-            android:name=".data.murmur.MurmurReminder$Receiver"
-            android:exported="false" />
-
         <!-- Scheduled notification receiver — fires `android-notification schedule`
              alarms so the deferred notification posts at the requested time. -->
         <receiver

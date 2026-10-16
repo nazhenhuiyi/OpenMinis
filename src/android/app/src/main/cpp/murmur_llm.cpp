@@ -4,7 +4,9 @@
 //
 // run() decodes the prompt, reports the probability of a probe token at the
 // first output position (the intent score: 1 - P("记录")), then generates
-// greedily under a GBNF grammar so the line always parses.
+// greedily under a GBNF grammar so the line always parses. Where the second
+// field (the mood) starts, it also reads the probability of each option given,
+// so the app knows how sure the model is, not only what it chose.
 #include <jni.h>
 #include <android/log.h>
 
@@ -41,6 +43,17 @@ std::vector<llama_token> tokenize(const llama_vocab * vocab, const std::string &
     std::vector<llama_token> toks(n);
     if (llama_tokenize(vocab, text.c_str(), (int32_t) text.size(), toks.data(), n, false, special) < 0) toks.clear();
     return toks;
+}
+
+/** Softmax over the whole vocabulary at [logits], for the given tokens only. */
+std::vector<double> probs(const float * logits, int n_vocab, const std::vector<llama_token> & want) {
+    float mx = logits[0];
+    for (int i = 1; i < n_vocab; i++) mx = std::max(mx, logits[i]);
+    double sum = 0;
+    for (int i = 0; i < n_vocab; i++) sum += std::exp((double) (logits[i] - mx));
+    std::vector<double> out;
+    for (llama_token t : want) out.push_back(t >= 0 ? std::exp((double) (logits[t] - mx)) / sum : 0.0);
+    return out;
 }
 
 std::string piece(const llama_vocab * vocab, llama_token t) {
@@ -100,12 +113,15 @@ Java_com_openminis_app_data_murmur_MurmurLlm_nativeFree(JNIEnv *, jclass, jlong 
 }
 
 /**
- * Returns "<probability of probe>\n<generated line>", or null on failure.
- * The probability is read from the raw logits, before the grammar.
+ * Returns "<probability of probe>\n<generated line>\n<p1,p2,…>", or null on
+ * failure. The last line has, for each of [jfield]'s newline-separated
+ * options, the probability of its first token where the second field begins
+ * (empty if that point was not seen). All are read from the raw logits,
+ * before the grammar.
  */
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_openminis_app_data_murmur_MurmurLlm_nativeRun(
-        JNIEnv * env, jclass, jlong ptr, jstring jprompt, jstring jgrammar, jstring jprobe, jint maxTokens) {
+        JNIEnv * env, jclass, jlong ptr, jstring jprompt, jstring jgrammar, jstring jprobe, jstring jfield, jint maxTokens) {
     auto * h = reinterpret_cast<Handle *>(ptr);
     if (!h) return nullptr;
     llama_memory_clear(llama_get_memory(h->ctx), true);
@@ -115,17 +131,26 @@ Java_com_openminis_app_data_murmur_MurmurLlm_nativeRun(
     if (toks.empty() || (int) toks.size() + maxTokens > n_ctx) return nullptr;
     if (llama_decode(h->ctx, llama_batch_get_one(toks.data(), (int32_t) toks.size())) != 0) return nullptr;
 
+    const int n_vocab = llama_vocab_n_tokens(h->vocab);
     float probe = 0.f;
     std::vector<llama_token> probeToks = tokenize(h->vocab, str(env, jprobe), false);
-    if (!probeToks.empty()) {
-        const float * logits = llama_get_logits_ith(h->ctx, -1);
-        const int n_vocab = llama_vocab_n_tokens(h->vocab);
-        float mx = logits[0];
-        for (int i = 1; i < n_vocab; i++) mx = std::max(mx, logits[i]);
-        double sum = 0;
-        for (int i = 0; i < n_vocab; i++) sum += std::exp((double) (logits[i] - mx));
-        probe = (float) (std::exp((double) (logits[probeToks[0]] - mx)) / sum);
+    if (!probeToks.empty()) probe = (float) probs(llama_get_logits_ith(h->ctx, -1), n_vocab, {probeToks[0]})[0];
+
+    // The second field's options, by first token (-1 for one that won't tokenize).
+    std::vector<llama_token> fieldToks;
+    {
+        std::string all = str(env, jfield);
+        size_t at = 0;
+        while (at <= all.size() && !all.empty()) {
+            size_t nl = all.find('\n', at);
+            std::string opt = all.substr(at, nl == std::string::npos ? std::string::npos : nl - at);
+            auto t = tokenize(h->vocab, opt, false);
+            fieldToks.push_back(t.empty() ? -1 : t[0]);
+            if (nl == std::string::npos) break;
+            at = nl + 1;
+        }
     }
+    std::string field;
 
     std::string grammar = str(env, jgrammar);
     auto sp = llama_sampler_chain_default_params();
@@ -141,6 +166,13 @@ Java_com_openminis_app_data_murmur_MurmurLlm_nativeRun(
 
     std::string out;
     for (int i = 0; i < maxTokens; i++) {
+        // Just past the first '|': the second field is about to start.
+        if (field.empty() && !fieldToks.empty() && !out.empty() && out.back() == '|' && out.find('|') == out.size() - 1) {
+            for (double p : probs(llama_get_logits_ith(h->ctx, -1), n_vocab, fieldToks)) {
+                if (!field.empty()) field += ",";
+                field += std::to_string(p);
+            }
+        }
         llama_token t = llama_sampler_sample(chain, h->ctx, -1);
         if (llama_vocab_is_eog(h->vocab, t)) break;
         out += piece(h->vocab, t);
@@ -149,6 +181,8 @@ Java_com_openminis_app_data_murmur_MurmurLlm_nativeRun(
     }
     llama_sampler_free(chain);
 
-    std::string res = std::to_string(probe) + "\n" + out;
+    // The line only: a token may have carried the newline and more after it.
+    out = out.substr(0, out.find('\n'));
+    std::string res = std::to_string(probe) + "\n" + out + "\n" + field;
     return env->NewStringUTF(res.c_str());
 }

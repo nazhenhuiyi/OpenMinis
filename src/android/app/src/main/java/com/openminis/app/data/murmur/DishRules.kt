@@ -5,7 +5,7 @@ package com.openminis.app.data.murmur
  * (SPEC §19.6). The model also picks out ingredients when a murmur is a
  * recipe ("咖喱 · 花椒 · 牛肉块 · 茄子"), now and then a plant (绣球花), and
  * sometimes cuts a name short (厚蛋 for 厚蛋烧) — cleaned up here, by rule,
- * with the author's own murmurs as the test cases.
+ * tested on cases shaped like real murmurs. Only the model says what is food.
  */
 object DishRules {
     /** Too general to be a dish. */
@@ -36,19 +36,6 @@ object DishRules {
 
     /** A name cut short before one of these is lengthened to include it (厚蛋 → 厚蛋烧). */
     private val TAIL = Regex("^(烧|汤|面|饭|饼|球|卷|粥|锅)")
-
-    /** The murmur talks about making the food itself, not just eating it. */
-    private val COOKED = Regex("做了|做的|做会|自己做|在做|制作|煮了|炒了|烤了|炖了|蒸了|煎了|熬了|包了|出锅|下厨|学会|试着做|食材|菜谱|厨房|做一道|做一个|来一个")
-
-    /** Words of cooking this close to the dish name tie them together; "做了很多事情" far off does not. */
-    private const val NEAR = 12
-
-    fun homemade(body: String, dish: String? = null): Boolean {
-        if (dish == null) return COOKED.containsMatchIn(body)
-        val at = body.indexOf(dish).takeIf { it >= 0 } ?: return COOKED.containsMatchIn(body)
-        val window = body.substring(maxOf(0, at - NEAR), minOf(body.length, at + dish.length + NEAR))
-        return COOKED.containsMatchIn(window)
-    }
 
     /**
      * The dishes among [foods] (a murmur's 吃喝 mentions, in order), named as

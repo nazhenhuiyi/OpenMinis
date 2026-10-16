@@ -1,5 +1,11 @@
 package com.openminis.app.ui.today
 
+import androidx.compose.foundation.border
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.platform.LocalContext
+import kotlinx.coroutines.delay
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.SizeTransform
@@ -90,7 +96,13 @@ private sealed interface Sheet {
     data class Dishes(val focus: DishFocus?) : Sheet
     /** "That day" (§20.1): every note of the page's day. */
     data class Day(val page: ExplorePage) : Sheet
+    /** 心愿单 in full. */
+    data object Wishes : Sheet
 }
+
+/** The colour of wishes: something still ahead. */
+private val Wishful = Color(0xFF8E7CC3)
+private val WishfulSoft = Color(0x268E7CC3)
 
 /** [onAskMinis] as on Today: the nature page can hand a species to a new chat. */
 @Composable
@@ -108,6 +120,11 @@ fun ExploreScreen(
     val listState = rememberLazyListState()
     var sheet by remember { mutableStateOf<Sheet?>(null) }
     var viewer by remember { mutableStateOf<Pair<List<CameraPhoto>, Int>?>(null) }
+    val snackbar = remember { SnackbarHostState() }
+    val context = LocalContext.current
+    // Ticking a wish off or letting it go happens at once, with a moment to take it back.
+    val onWish = rememberWishSetter(snackbar, vm::setWish)
+    val askWish: (Wish) -> Unit = { w -> sheet = null; onAskMinis(context.getString(R.string.explore_wish_ask_prompt, w.text), emptyList()) }
 
     // Back on 探索 goes to Today first, like any tab beside the home one.
     // Composed after the NavHost and AppNavigation's own, so it is asked first.
@@ -123,6 +140,7 @@ fun ExploreScreen(
     }
 
     Surface(modifier = modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+      Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().statusBarsPadding()) {
             Row(Modifier.fillMaxWidth().padding(start = 18.dp, end = 18.dp, top = 12.dp, bottom = 6.dp), verticalAlignment = Alignment.Bottom) {
                 Text(stringResource(R.string.tab_explore), fontSize = 22.sp, fontWeight = FontWeight.Bold)
@@ -146,9 +164,12 @@ fun ExploreScreen(
                     zone = zone,
                     onSheet = { sheet = it },
                     onPhoto = { list, i -> viewer = list to i },
+                    onWish = onWish,
                 )
             }
         }
+        SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
+      }
     }
 
     when (val sh = sheet) {
@@ -160,6 +181,7 @@ fun ExploreScreen(
         )
         is Sheet.Dishes -> DishesPage(today, focus = sh.focus, initial = data?.food, onDismiss = { sheet = null })
         is Sheet.Day -> DayPage(vm, sh.page, zone, onPhoto = { list, i -> viewer = list to i }, onDismiss = { sheet = null })
+        Sheet.Wishes -> WishesPage(data?.wishes.orEmpty(), vm::setWish, onAsk = askWish, onDismiss = { sheet = null })
         null -> Unit
     }
     // After the day page, so a photo opened from it shows above it.
@@ -175,6 +197,7 @@ private fun ExploreContent(
     zone: ZoneId,
     onSheet: (Sheet) -> Unit,
     onPhoto: (List<CameraPhoto>, Int) -> Unit,
+    onWish: (Wish, String) -> Unit,
 ) {
     LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 28.dp)) {
         item(key = "page") {
@@ -202,7 +225,7 @@ private fun ExploreContent(
                     Tile(
                         title = stringResource(R.string.explore_food),
                         sub = if (d.food.isEmpty()) stringResource(R.string.explore_food_empty)
-                        else d.food.dishCounts().let { (made, tasted) -> stringResource(R.string.today_dishes_summary, made, tasted) },
+                        else stringResource(R.string.explore_food_count, d.food.size),
                         cover = d.foodCover,
                         emoji = "🍳",
                         tint = KitchenSoft,
@@ -211,6 +234,29 @@ private fun ExploreContent(
                     )
                 } else {
                     Spacer(Modifier.weight(1f))
+                }
+            }
+        }
+        val open = d.wishes.filter { it.open }
+        if (d.wishes.isNotEmpty()) {
+            item(key = "wishes-h") {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
+                    SectionTitle(stringResource(R.string.explore_wishes), Modifier.weight(1f))
+                    Text(
+                        stringResource(R.string.explore_wishes_all) + " ›",
+                        fontSize = 13.sp,
+                        color = Wishful,
+                        modifier = Modifier.padding(bottom = 10.dp).clip(RoundedCornerShape(50))
+                            .clickable { onSheet(Sheet.Wishes) }.padding(horizontal = 8.dp, vertical = 2.dp),
+                    )
+                }
+            }
+            item(key = "wishes-sub") {
+                MetaText(wishesSummary(open.size, d.wishes.count { it.done }))
+            }
+            for (w in open.take(3)) {
+                item(key = "wish:${w.note.id}") {
+                    WishRow(w, zone, onDone = { onWish(w, Explore.WISH_DONE) }) { onSheet(Sheet.Day(ExplorePage(w.note, null))) }
                 }
             }
         }
@@ -412,7 +458,7 @@ private fun FirstsStrip(firsts: List<ExploreFirst>, photos: Map<String, CameraPh
                 Spacer(Modifier.height(8.dp))
                 Text(f.name, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(
-                    stringResource(if (f.species) R.string.explore_first_saw else R.string.explore_first_made) + " · " +
+                    stringResource(if (f.species) R.string.explore_first_saw else R.string.explore_first_written) + " · " +
                         shortDate(Instant.ofEpochMilli(f.atMs).atZone(zone).toLocalDate()),
                     fontSize = 11.sp,
                     color = if (f.species) Leaf else Kitchen,
@@ -522,3 +568,126 @@ private fun DayPage(vm: ExploreViewModel, page: ExplorePage, zone: ZoneId, onPho
         }
     }
 }
+
+// ───────────────────────────── 心愿单 ─────────────────────────────
+
+/**
+ * One wish: a ring to tick it off (it fills, then the row goes), the sentence
+ * that says it, when it was written — or, once done, when it came true.
+ */
+@Composable
+private fun WishRow(
+    w: Wish,
+    zone: ZoneId,
+    onDone: (() -> Unit)?,
+    onUndo: (() -> Unit)? = null,
+    extra: (@Composable () -> Unit)? = null,
+    onOpen: (() -> Unit)? = null,
+) {
+    var ticking by remember(w.note.id, w.done) { mutableStateOf(false) }
+    val fill by animateFloatAsState(if (w.done || ticking) 1f else 0f, tween(260), label = "tick")
+    LaunchedEffect(ticking) {
+        if (ticking) { delay(380); onDone?.invoke() }
+    }
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).then(if (onOpen != null) Modifier.clickable(onClick = onOpen) else Modifier)
+            .padding(vertical = 9.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Box(
+            Modifier.padding(top = 1.dp).size(24.dp).clip(CircleShape)
+                .background(Leaf.copy(alpha = fill))
+                .border(1.5.dp, if (fill > 0f) Leaf else Wishful, CircleShape)
+                .then(
+                    when {
+                        !w.done && onDone != null -> Modifier.clickable { ticking = true }
+                        w.done && onUndo != null -> Modifier.clickable(onClick = onUndo)
+                        else -> Modifier
+                    },
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (fill > 0.5f) Text("✓", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(w.text, fontSize = 15.sp, lineHeight = 21.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
+            Spacer(Modifier.height(3.dp))
+            val written = shortDate(w.note.date)
+            if (w.done) Text(
+                stringResource(R.string.explore_wish_done_on, w.note.wishOn?.let(::shortDate) ?: written),
+                fontSize = 12.sp, color = Leaf,
+            ) else MetaText(written)
+            extra?.invoke()
+        }
+    }
+}
+
+/**
+ * Ticking a wish off or letting it go: at once, with a nudge for "done", and a
+ * snackbar that can take it back.
+ */
+@Composable
+private fun rememberWishSetter(snackbar: SnackbarHostState, onSet: (ExploreNote, String?) -> Unit): (Wish, String) -> Unit {
+    val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    val haptics = LocalHapticFeedback.current
+    return { w, state ->
+        if (state == Explore.WISH_DONE) haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+        onSet(w.note, state)
+        scope.offerUndo(
+            snackbar,
+            context.getString(if (state == Explore.WISH_DONE) R.string.explore_wish_done_snack else R.string.explore_wish_dropped_snack),
+            context.getString(R.string.today_undo),
+        ) { onSet(w.note, null) }
+    }
+}
+
+/** "还有 3 件想做的事", or once none is left, "都做到了，一共 5 件". */
+@Composable
+private fun wishesSummary(open: Int, done: Int): String =
+    if (open == 0) stringResource(R.string.explore_wishes_all_done, done) else stringResource(R.string.explore_wishes_count, open)
+
+/** 心愿单 in full: what is still wished for, each with "look into it" and "let go", then what came true. */
+@Composable
+private fun WishesPage(wishes: List<Wish>, onSet: (ExploreNote, String?) -> Unit, onAsk: (Wish) -> Unit, onDismiss: () -> Unit) {
+    val zone = ZoneId.systemDefault()
+    val snackbar = remember { SnackbarHostState() }
+    val set = rememberWishSetter(snackbar, onSet)
+    val open = wishes.filter { it.open }
+    val done = wishes.filter { it.done }
+    FullScreenPage(onDismiss, header = { PageTitle(stringResource(R.string.explore_wishes)) }) {
+        Box(Modifier.weight(1f)) {
+            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 80.dp)) {
+                item { MetaText(wishesSummary(open.size, done.size)) }
+                items(open, key = { it.note.id }) { w ->
+                    WishRow(
+                        w, zone,
+                        onDone = { set(w, Explore.WISH_DONE) },
+                        extra = {
+                            Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                WishAction(stringResource(R.string.explore_wish_ask), Wishful, WishfulSoft) { onAsk(w) }
+                                WishAction(stringResource(R.string.explore_wish_drop), MaterialTheme.colorScheme.onSurfaceVariant, MaterialTheme.colorScheme.surfaceContainerHigh) {
+                                    set(w, Explore.WISH_DROPPED)
+                                }
+                            }
+                        },
+                    )
+                }
+                if (done.isNotEmpty()) {
+                    item { SectionTitle(stringResource(R.string.explore_wishes_done_title)) }
+                    // Tapping a done one's ring puts it back on the list.
+                    items(done, key = { "done:" + it.note.id }) { w -> WishRow(w, zone, onDone = null, onUndo = { onSet(w.note, null) }) }
+                }
+            }
+            SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
+        }
+    }
+}
+
+@Composable
+private fun WishAction(label: String, ink: Color, bg: Color, onClick: () -> Unit) =
+    Text(
+        label, fontSize = 12.sp, color = ink,
+        modifier = Modifier.clip(RoundedCornerShape(50)).background(bg).clickable(onClick = onClick).padding(horizontal = 10.dp, vertical = 4.dp),
+    )

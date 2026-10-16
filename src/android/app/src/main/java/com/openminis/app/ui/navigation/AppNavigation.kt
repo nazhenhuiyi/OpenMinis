@@ -411,7 +411,7 @@ fun AppNavigation(
             // steps that explain why. Once the user has either a session or a
             // provider, their preference is honoured again.
             !hasAnySession && !hasAnyProvider -> null
-            mode == 1 -> chatRepository.dao.listSessions().firstOrNull { !it.isChild }?.let { Routes.chat(it.id) }
+            mode == 1 -> chatRepository.dao.listSessions().firstOrNull { !it.isHiddenFromLists }?.let { Routes.chat(it.id) }
             mode == 2 -> Routes.chat("__new__${java.util.UUID.randomUUID()}")
             mode == 3 -> null
             else -> {
@@ -423,7 +423,7 @@ fun AppNavigation(
                 // when nothing was ever done.
                 // [T-child-session-leak] "Resume what I was doing" must never
                 // land in a hidden agent child session.
-                val latest = chatRepository.dao.listSessions().firstOrNull { !it.isChild }
+                val latest = chatRepository.dao.listSessions().firstOrNull { !it.isHiddenFromLists }
                     ?: return@LaunchedEffect
                 val fresh = System.currentTimeMillis() - latest.updatedAt < autoThresholdMs
                 // [XSessionDiag] Hypothesis 1: auto mode silently RESUMES the most
@@ -562,19 +562,25 @@ fun AppNavigation(
         }
     }
     val tabScope = androidx.compose.runtime.rememberCoroutineScope()
+    // From Today or 探索 into a chat: the chat tab, that chat on top of the session list.
+    val goToChat: (String) -> Unit = { sessionId ->
+        com.openminis.app.ui.today.MainTabs.select(com.openminis.app.ui.today.MainTabs.Tab.CHAT)
+        navController.navigate(Routes.chat(sessionId)) {
+            popUpTo(Routes.SESSION_LIST) { inclusive = false }
+            launchSingleTop = true
+        }
+    }
     val askMinis: (String, List<String>) -> Unit = { text, uris ->
         tabScope.launch {
             com.openminis.app.ui.today.AskMinis.stage(context, text, uris)
-            com.openminis.app.ui.today.MainTabs.select(com.openminis.app.ui.today.MainTabs.Tab.CHAT)
             // Navigate BEFORE publishing, so the warm-share fallback above sees
             // a chat route and does not open a second draft.
-            navController.navigate(Routes.chat(newDraftSessionId())) {
-                popUpTo(Routes.SESSION_LIST) { inclusive = false }
-                launchSingleTop = true
-            }
+            goToChat(newDraftSessionId())
             com.openminis.app.ui.today.AskMinis.publish(context)
         }
     }
+    // [T-today-murmur-agent] A chat Minis prepared on a murmur.
+    val openChat: (String) -> Unit = goToChat
     androidx.compose.foundation.layout.Column(Modifier.fillMaxSize()) {
     androidx.compose.foundation.layout.Box(
         Modifier.weight(1f).fillMaxWidth().then(
@@ -1647,7 +1653,7 @@ fun AppNavigation(
     // position and the like) for when it shows again.
     when (currentTab) {
         com.openminis.app.ui.today.MainTabs.Tab.TODAY -> tabStates.SaveableStateProvider("today") {
-            com.openminis.app.ui.today.TodayScreen(onAskMinis = askMinis, modifier = Modifier.fillMaxSize())
+            com.openminis.app.ui.today.TodayScreen(onAskMinis = askMinis, onOpenChat = openChat, modifier = Modifier.fillMaxSize())
         }
         com.openminis.app.ui.today.MainTabs.Tab.EXPLORE -> tabStates.SaveableStateProvider("explore") {
             com.openminis.app.ui.today.ExploreScreen(onAskMinis = askMinis, modifier = Modifier.fillMaxSize())

@@ -15,7 +15,15 @@ data class MurmurTags(
     val highlight: Boolean,
     /** 1 − P(first token is 记录): how likely the model thinks something needs doing. */
     val actScore: Float,
+    /**
+     * How likely the mood's tier is right, calibrated ([MurmurLabels.moodConfidence]);
+     * null for tags made before it was read.
+     */
+    val moodConf: Float? = null,
 ) {
+    /** The mood, only when the model is sure enough of its tier to show it (SPEC §19.2). */
+    val shownMood: String? get() = mood.takeIf { (moodConf ?: 0f) >= MurmurLabels.MOOD_SHOW }
+
     val tier: MoodTier get() = MoodTier.of(mood)
 }
 
@@ -71,16 +79,35 @@ object MurmurLabels {
 
     /**
      * Sent to the cloud for a second look when the model scores at least this
-     * (§19.3). On the author's 244 real murmurs: with [KEYWORDS], 95% of the
-     * ones that needed doing, about a fifth of all.
+     * (§19.3). With everything in [isCandidate], on the author's 244 real
+     * murmurs (2026-10-16): 20 of the 21 that needed doing or asked something,
+     * 22% of all sent.
      */
     const val ACT_THRESHOLD = 0.02f
 
-    /** Plain words that usually mean "to do" or "a question"; OR-ed with the model's score. */
-    val KEYWORDS = Regex("(明天|后天|今晚|下周|周[一二三四五六日末]|记得|提醒|别忘|得去|要去|得修|得买|准备|[吗呢]？|？$|怎么|哪个|什么.{0,4}[呀呢]|查一下|帮我)")
+    /** Plain words that usually mean "to do", an errand, or "a question"; OR-ed with the model's score. */
+    val KEYWORDS = Regex(
+        "(明天|后天|今晚|下周|周[一二三四五六日末]|记得|提醒|别忘|得去|要去|得修|得买|准备" +
+            "|注销|取消|退订|续费|到期|过期|预约|挂号|截止" +
+            "|[吗呢]？|？$|怎么|哪个|什么.{0,4}[呀呢]|查一下|帮我)",
+    )
 
+    /**
+     * Wanting to do something ("想去 / 很想学会 / 有机会试试…"): worth an "ask
+     * Minis" (shows, opening hours, where to start), and what 心愿单 collects.
+     */
+    val WISH = Regex("(好想|很想|特别想|真想|想要|打算|有机会|想)(看|读|去|买|学|试|吃|玩|做|写|画|养|种|拍|听)")
+
+    /** In the same sentence as a [WISH], it is not one: musing ("想做点什么才好呢"), or done already ("想喝粥，于是煮了一锅"). */
+    val NOT_A_WISH = Regex("什么|于是|结果")
+
+    /**
+     * Worth a second look in the cloud: to do or to ask (the model, its score,
+     * plain words), a question left unasked (the mood is 好奇), or a wish.
+     */
     fun isCandidate(text: String, tags: MurmurTags): Boolean =
-        tags.intent != "记录" || tags.actScore >= ACT_THRESHOLD || KEYWORDS.containsMatchIn(text)
+        tags.intent != "记录" || tags.actScore >= ACT_THRESHOLD || KEYWORDS.containsMatchIn(text) ||
+            tags.mood == "好奇" || WISH.containsMatchIn(text)
 
     fun prompt(text: String): String =
         "<|im_start|>system\n$SYSTEM<|im_end|>\n<|im_start|>user\n${text.take(MAX_CHARS)}<|im_end|>\n" +
@@ -105,11 +132,35 @@ object MurmurLabels {
     private fun squash(s: String) = s.replace(Regex("\\s+"), "")
 
     /**
+     * Mood colours only where the model is sure (scripts/murmur_train/system_one.py,
+     * 2026-10-16, 244 real murmurs): its tier is right 75% of the time overall but
+     * it is overconfident; scaled by [MOOD_T] (fitted on the dev set). Shown from
+     * [MOOD_SHOW]: about 62% of murmurs get a colour and 85% of those are right
+     * (at 0.8 only 43% did, 88% right — most murmurs stayed blank; the author
+     * chose 0.7 on 2026-10-16).
+     */
+    const val MOOD_T = 2.4
+    const val MOOD_SHOW = 0.7f
+
+    /**
+     * The calibrated probability that [mood]'s tier is right, from the model's
+     * probabilities for each of [MOODS] where the mood field began.
+     */
+    fun moodConfidence(probs: List<Double>, mood: String): Float? {
+        if (probs.size != MOODS.size || probs.sum() <= 0.0) return null
+        val tiers = MoodTier.entries.map { t -> MOODS.indices.filter { MoodTier.of(MOODS[it]) == t }.sumOf { probs[it] } }
+        // Temperature scaling: softmax(log p / T) == p^(1/T), normalised.
+        val scaled = tiers.map { Math.pow(maxOf(it, 1e-12), 1.0 / MOOD_T) }
+        return (scaled[MoodTier.of(mood).ordinal] / scaled.sum()).toFloat()
+    }
+
+    /**
      * Parse a tag line; null if it is not one. Mentions whose words are not in
      * [text] are dropped (whitespace-insensitive) — the model may only point
-     * at what was written, never add to it.
+     * at what was written, never add to it. [moodProbs] not read (the mood
+     * field began inside a token): confidence 0 — not shown, and not run again.
      */
-    fun parse(line: String, text: String, actScore: Float): MurmurTags? {
+    fun parse(line: String, text: String, actScore: Float, moodProbs: List<Double> = emptyList()): MurmurTags? {
         val p = line.trim().split("|")
         if (p.size != 5) return null
         val (intent, mood, aspects, mentions, hl) = p
@@ -125,6 +176,6 @@ object MurmurLabels {
             if (t !in MENTION_TYPES || v.isEmpty()) return@mapNotNull null
             if (v in text || squash(v) in flat) t to v else null
         }.distinctBy { it.second }
-        return MurmurTags(intent, mood, asp.take(2), men.take(5), hl == "是", actScore)
+        return MurmurTags(intent, mood, asp.take(2), men.take(5), hl == "是", actScore, moodConfidence(moodProbs, mood) ?: 0f)
     }
 }

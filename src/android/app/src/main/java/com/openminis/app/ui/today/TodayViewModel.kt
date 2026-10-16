@@ -226,15 +226,14 @@ class TodayViewModel(app: Application) : AndroidViewModel(app), ExploreSources {
         murmur.onDays(_state.value.days)
     }
 
-    /** Each returns an undo (null if there was nothing to change). */
-    fun acceptReminder(note: TodayNote): (() -> Unit)? {
-        val prev = murmur.acceptReminder(note) ?: return null
-        // A reminder nobody can see is no reminder: ask once if notifications are off (as §14.6 does).
-        if (!androidx.core.app.NotificationManagerCompat.from(context).areNotificationsEnabled()) events.trySend(Event.NeedNotificationPermission)
-        return { murmur.restore(note, prev) }
-    }
+    /** The murmur Minis is looking at in the background right now (§19.3), if any. */
+    val murmurWorking: StateFlow<String?> get() = murmur.working
+
+    /** "不用" under a murmur; returns an undo (null if there was nothing to change). */
     fun dismissMurmurSuggestion(note: TodayNote): (() -> Unit)? = murmur.dismiss(note)?.let { prev -> { murmur.restore(note, prev) } }
-    fun setReminderTime(note: TodayNote, atMs: Long) { murmur.setReminderTime(note, atMs) }
+
+    /** Tapped a suggestion: its chat joins the session list; returns its id to open (§19.3). */
+    suspend fun openMurmurChat(note: TodayNote): String? = murmur.open(note)
     override suspend fun foodNotes(days: List<Pair<LocalDate, List<com.openminis.app.data.journal.JournalEntry>>>?): List<FoodNote> =
         murmur.foodNotes(days)
 
@@ -303,7 +302,6 @@ class TodayViewModel(app: Application) : AndroidViewModel(app), ExploreSources {
         refreshWeather()
         WeatherAlerts.schedule(context)
         HabitReminder.schedule(context)
-        com.openminis.app.data.murmur.MurmurReminder.rescheduleAll(context)
     }
 
     fun loadOlder() {

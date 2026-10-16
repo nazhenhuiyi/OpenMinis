@@ -768,6 +768,12 @@ class MinisApp : Application(), ImageLoaderFactory {
                 com.openminis.app.logging.AppLogger.warning("OrphanSweep", "sweep threw: ${it.message}")
             }
         }
+        // [T-today-murmur-agent] Murmur chats never opened, wherever they were left
+        // (a killed run, Today never reopened): same cold-start moment, keyed on the DB.
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+            runCatching { com.openminis.app.data.murmur.MurmurAgent.sweep(this@MinisApp) }
+                .onFailure { com.openminis.app.logging.AppLogger.warning("MurmurAgent", "sweep threw: ${it.message}") }
+        }
 
         // T180-bg-notif: background-settings + task-completion notifier.
         // The notifier is wired into SessionActivityTracker's completion

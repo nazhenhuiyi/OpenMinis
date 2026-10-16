@@ -1263,6 +1263,16 @@ class ChatViewModel(
     internal val isHelper: Boolean get() = helperConfig != null
 
     /**
+     * [T-today-murmur-agent] Set by Today (MurmurAgent) for the one turn it runs
+     * in the background on a murmur, while the user is not there: appended to
+     * the system prompt, and the tools that act on their own (memory_write,
+     * browser_use, the journal tool, sub agents) are left out — the turn only
+     * looks things up and prepares. Cleared once that turn is done, so the chat
+     * the user opens is an ordinary one.
+     */
+    @Volatile internal var murmurBrief: String? = null
+
+    /**
      * [T-android-browser-tab-ownership] Who this view model is, as far as the
      * shared browser pool is concerned.
      *
@@ -1955,6 +1965,7 @@ class ChatViewModel(
             ),
             memoryEnabled = _memoryEnabled.value,
             isHelper = isHelper,
+            prepareOnly = murmurBrief != null,
             delegateEnabled = com.openminis.app.tools.AgentToolSwitch.AGENTS.isEnabled(context),
             browserEnabled = com.openminis.app.tools.AgentToolSwitch.BROWSER.isEnabled(context),
             // [T-sub-agents-v1] Rebuilt on every schema build (this property is
@@ -15340,6 +15351,7 @@ Scheduled tasks: crontab / at / nohup loops will stop when the app is suspended,
             append("- Current date: ").append(dateStr).append(" (").append(tzId).append(")\n")
             append("- Device language: ").append(lang).append("\n")
             append("- minis-model-use models available: ").append(modelUseCount)
+            murmurBrief?.let { append("\n\n").append(it) }
         }
     }
 

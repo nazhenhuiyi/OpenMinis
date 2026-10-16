@@ -33,6 +33,11 @@ object AgentTools {
         // §4.3 — helpers have no long-term memory). memory_get stays so a
         // helper can still LOOK things up.
         isHelper: Boolean = false,
+        // [T-today-murmur-agent] A background turn on a murmur, the user away:
+        // nothing that acts by itself — no browser, no journal tool, no
+        // memory_write, no sub agents. memory_get and the shell (to look
+        // things up) stay.
+        prepareOnly: Boolean = false,
         // [T-p2-agent-settings] Settings › Agents can remove delegation globally.
         delegateEnabled: Boolean = true,
         // [T-tools-granular-switches] Settings › Agent Tools can remove
@@ -54,15 +59,15 @@ object AgentTools {
         if (supportsImageInput || visionGroupConfigured) {
             add(ReadImageTool.definition())
         }
-        if (browserEnabled) add(browserUseDefinition())
+        if (browserEnabled && !prepareOnly) add(browserUseDefinition())
         // [T-today-tab] Journal access is the main agent's; helpers can still
         // file_read /var/minis/journal.
-        if (!isHelper) add(JournalTool.definition())
+        if (!isHelper && !prepareOnly) add(JournalTool.definition())
         if (memoryEnabled) {
-            if (!isHelper) add(memoryWriteDefinition())
+            if (!isHelper && !prepareOnly) add(memoryWriteDefinition())
             add(memoryGetDefinition())
         }
-        if (!isHelper && delegateEnabled) {
+        if (!isHelper && !prepareOnly && delegateEnabled) {
             add(subAgentTaskDefinition(rosterNames))
         }
     }
