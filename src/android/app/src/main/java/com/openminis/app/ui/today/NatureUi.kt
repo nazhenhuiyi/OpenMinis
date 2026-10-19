@@ -309,7 +309,13 @@ internal fun IdentifySheet(
     // The rest of the strip, one at a time once the photo on screen has its answer.
     LaunchedEffect(Unit) {
         snapshotFlow { current?.let { results.containsKey(it.relativePath) } ?: true }.first { it }
-        for (ph in photos.take(PREFETCH)) if (!results.containsKey(ph.relativePath)) results[ph.relativePath] = vm.identify(ph)
+        // [T-today-species-heat] What is already known shows for the whole strip; only a few
+        // others are looked at ahead, and none while the phone is warm.
+        for (ph in photos) if (!results.containsKey(ph.relativePath)) vm.keptResult(ph)?.let { results[ph.relativePath] = it }
+        for (ph in photos.filter { !results.containsKey(it.relativePath) }.take(PREFETCH)) {
+            if (vm.speciesWarm()) break
+            if (!results.containsKey(ph.relativePath)) results[ph.relativePath] = vm.identify(ph)
+        }
     }
     LaunchedEffect(current) {
         drawn = null
@@ -418,8 +424,8 @@ internal fun IdentifySheet(
     }
 }
 
-/** Photos of a group looked at ahead in the identify sheet; the NPU takes about a second each. */
-private const val PREFETCH = 12
+/** Photos of a group looked at ahead in the identify sheet (besides kept results); the NPU takes about a second each. */
+private const val PREFETCH = 3
 
 /**
  * The whole photo (not cropped, so a box means the same on screen and to the

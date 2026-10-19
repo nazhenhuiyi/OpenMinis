@@ -447,6 +447,8 @@ class TodayViewModel(app: Application) : AndroidViewModel(app), ExploreSources {
     // ── Species (SPEC §17) ────────────────────────────────────────────────
 
     private val speciesCache = app.getSharedPreferences(SPECIES_PREFS, Context.MODE_PRIVATE)
+    /** [T-today-species-heat] Whole results ([SpeciesId.toLine], after a timestamp) for "Identify", dropped with the verdicts. */
+    private val speciesResults = app.getSharedPreferences(SPECIES_RESULTS_PREFS, Context.MODE_PRIVATE)
 
     private var speciesJob: Job? = null
     private var pendingDays: List<TodayDay>? = null
@@ -510,7 +512,13 @@ class TodayViewModel(app: Application) : AndroidViewModel(app), ExploreSources {
             val found = HashMap<String, SpeciesSuggestion>()
             val verdicts = HashMap<String, String>()
             for (p in todo) {
+                // [T-today-species-heat] The rest are looked at on a later load (open, foreground, new photo).
+                if (SpeciesId.isWarm(context)) {
+                    AppLogger.info("TodaySpecies", "phone warm, automatic species pass paused")
+                    break
+                }
                 val r = SpeciesId.identify(context, Uri.parse(p.uri), takenAtMs = p.takenAtMs) ?: continue
+                keepResult(p.relativePath, r)
                 val sure = r.confident?.let { SpeciesSuggestion.of(it, r.region) }
                 verdicts[p.relativePath] = sure?.let(::encodeSuggestion) ?: NO_SPECIES
                 if (sure != null) found[p.relativePath] = sure
@@ -535,7 +543,30 @@ class TodayViewModel(app: Application) : AndroidViewModel(app), ExploreSources {
     private val identified = HashMap<String, SpeciesId.Result>()
 
     suspend fun identify(photo: CameraPhoto): SpeciesId.Result? =
-        identified[photo.relativePath] ?: SpeciesId.identify(context, Uri.parse(photo.uri), k = 3, takenAtMs = photo.takenAtMs)?.also { identified[photo.relativePath] = it }
+        keptResult(photo) ?: SpeciesId.identify(context, Uri.parse(photo.uri), k = 3, takenAtMs = photo.takenAtMs)?.also {
+            identified[photo.relativePath] = it
+            keepResult(photo.relativePath, it)
+        }
+
+    /** What is already known about [photo] — this screen's or a kept result — without looking at it. */
+    suspend fun keptResult(photo: CameraPhoto): SpeciesId.Result? =
+        identified[photo.relativePath] ?: speciesResults.getString(photo.relativePath, null)
+            ?.let { SpeciesId.fromLine(context, it.substringAfter('\t')) }
+            ?.also { identified[photo.relativePath] = it }
+
+    /** Whether looking ahead should wait (§17.3 prefetch): the phone is already warm. */
+    fun speciesWarm(): Boolean = SpeciesId.isWarm(context)
+
+    private fun keepResult(path: String, r: SpeciesId.Result) {
+        val e = speciesResults.edit().putString(path, "${System.currentTimeMillis()}\t${SpeciesId.toLine(r)}")
+        // Bounded: past the cap the oldest go (they are just looked at again if asked).
+        val all = speciesResults.all
+        if (all.size >= MAX_KEPT_RESULTS) {
+            all.entries.sortedBy { (it.value as? String)?.substringBefore('\t')?.toLongOrNull() ?: 0L }
+                .take(all.size - MAX_KEPT_RESULTS + KEPT_RESULTS_SLACK).forEach { e.remove(it.key) }
+        }
+        e.apply()
+    }
 
     /** Only the part of [photo] the user drew a box around (§17.3); not remembered. */
     suspend fun identify(photo: CameraPhoto, region: SpeciesId.Region): SpeciesId.Result? =
@@ -637,6 +668,7 @@ class TodayViewModel(app: Application) : AndroidViewModel(app), ExploreSources {
         val e = speciesCache.edit()
         for ((k, v) in speciesCache.all) if (v != USER_NO) e.remove(k)
         e.apply()
+        speciesResults.edit().clear().apply()
         prefs.edit().putString(KEY_SPECIES_VERDICTS, version).apply()
     }
 
@@ -1330,6 +1362,9 @@ class TodayViewModel(app: Application) : AndroidViewModel(app), ExploreSources {
         private const val RELOAD_DEBOUNCE_MS = 500L
         private const val MAX_EXIF_READS = 5
         private const val SPECIES_PREFS = "today_species"
+        private const val SPECIES_RESULTS_PREFS = "today_species_results"
+        private const val MAX_KEPT_RESULTS = 500
+        private const val KEPT_RESULTS_SLACK = 50
         private const val KEY_SPECIES_MIGRATED = "speciesNotesMigrated"
         private const val NO_SPECIES = "-"
         /** The user dismissed a suggestion or took a tag off: never suggested again, kept across cache refreshes. */

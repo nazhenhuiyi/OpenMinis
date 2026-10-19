@@ -85,6 +85,8 @@ object SpeciesId {
     private const val IDLE_RELEASE_MS = 90_000L
     /** Photos are decoded with their short side around this, before cropping. */
     private const val DECODE_SHORT = 1024
+    /** Largest whole-photo decode kept for cutting parts from (~8 MB); the automatic parts need about 0.8 MP. */
+    private const val WHOLE_MAX_PIXELS = 2_000_000L
     /** A find replaces the middle only when this much surer (Mac test: fewer wrong switches than "always the surest"). */
     private const val SWITCH_MARGIN = 0.15f
     /** How photos are looked at; change it when that changes, so kept verdicts are redone. */
@@ -242,10 +244,13 @@ object SpeciesId {
             }
             val where = SeenAt(provinceOf(app, photo.latLng ?: com.openminis.app.notification.WeatherAlerts.savedLocation(app)), monthOf(takenAtMs))
             // As it is and mirrored: one look can hinge on which way the leaf points.
+            var runs = 0
+            val started = android.os.SystemClock.elapsedRealtime()
             fun look(v: Region, mirrored: Boolean): Result? {
                 val px = try { photo.pixels(app, v) } catch (e: Throwable) { return null }
                 val a = encode(app, px) ?: throw NpuFailed()
                 val emb = if (mirrored) normalised(a, encode(app, mirror(px)) ?: throw NpuFailed()) else a
+                runs += if (mirrored) 2 else 1
                 return t.rank(emb, k, where).copy(region = v)
             }
             try {
@@ -253,6 +258,9 @@ object SpeciesId {
                 val centre = look(photo.centre(), mirrored = true) ?: return@withContext null
                 // On the CPU each look takes about a second: the middle only (a drawn box still reaches the rest).
                 if (sessionBackend == Backend.CPU) return@withContext centre
+                // [T-today-species-heat] Sureness is at most 1, so a middle this sure can't be
+                // beaten by the margin: the 13 parts would be looked at for nothing.
+                if (centre.sureness >= 1f - SWITCH_MARGIN) return@withContext centre
                 // The model searches the frame itself: overlapping parts at two sizes, the surest wins
                 // over the middle only by a clear margin (Mac test: fixes off-centre subjects, no new
                 // false finds on everyday photos). Each part is looked at once; the winner again mirrored.
@@ -261,11 +269,51 @@ object SpeciesId {
                 else look(best.region!!, mirrored = true)?.takeIf { it.sureness > centre.sureness + SWITCH_MARGIN } ?: centre
             } catch (e: NpuFailed) {
                 null
+            } finally {
+                android.util.Log.i(TAG, "identify runs=$runs ms=${android.os.SystemClock.elapsedRealtime() - started} drawn=${region != null} ${photo.rawW}x${photo.rawH}")
             }
         } finally {
-            photo.preview.recycle()
+            photo.recycle()
         }
     }
+
+    // ── Kept results (§17.3) ─────────────────────────────────────────────
+
+    /**
+     * [T-today-species-heat] A result as one line, so "Identify" can show what the automatic
+     * pass already found instead of looking at the photo again: match, genus probability,
+     * region, then the guesses by latin name (read back against the list by [fromLine]).
+     */
+    fun toLine(r: Result): String = listOf(
+        r.match.toString(),
+        r.genusProb.toString(),
+        r.region?.let { listOf(it.left, it.top, it.right, it.bottom).joinToString(",") }.orEmpty(),
+        r.top.joinToString(";") { "${it.taxon.latin}|${it.prob}|${if (it.genus) 1 else 0}" },
+    ).joinToString("\t")
+
+    /** Null when the line is unreadable or names a kind the list no longer has. */
+    suspend fun fromLine(context: Context, line: String): Result? {
+        val f = line.split('\t')
+        if (f.size < 4) return null
+        val match = f[0].toFloatOrNull() ?: return null
+        val genusProb = f[1].toFloatOrNull() ?: return null
+        val region = f[2].split(',').mapNotNull { it.toFloatOrNull() }.takeIf { it.size == 4 }?.let { Region(it[0], it[1], it[2], it[3]) }
+        val parts = f[3].split(';').filter { it.isNotBlank() }.map { it.split('|') }
+        if (parts.isEmpty() || parts.any { it.size != 3 }) return null
+        val byLatin = taxa(context, parts.map { it[0] })
+        val top = parts.map { p -> Guess(byLatin[p[0]] ?: return null, p[1].toFloatOrNull() ?: return null, p[2] == "1") }
+        return Result(top, match, genusProb, region)
+    }
+
+    /**
+     * [T-today-species-heat] The phone is already warm: looking ahead (the automatic pass,
+     * the identify sheet's prefetch) waits for a later visit. What the user asked about is
+     * still looked at.
+     */
+    fun isWarm(context: Context): Boolean =
+        Build.VERSION.SDK_INT >= 29 &&
+            (context.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager)
+                ?.currentThermalStatus?.let { it >= android.os.PowerManager.THERMAL_STATUS_LIGHT } == true
 
     private class NpuFailed : Exception()
 
@@ -447,7 +495,7 @@ object SpeciesId {
             if (rect.width() < 2 || rect.height() < 2) return null
             var sample = 1
             while (maxOf(rect.width(), rect.height()) / (sample * 2) >= SIZE * 2) sample *= 2
-            val bm = context.contentResolver.openInputStream(uri)?.use { input ->
+            val bm = fromWhole(context, rect, sample) ?: context.contentResolver.openInputStream(uri)?.use { input ->
                 @Suppress("DEPRECATION")
                 val dec = if (Build.VERSION.SDK_INT >= 31) android.graphics.BitmapRegionDecoder.newInstance(input) else android.graphics.BitmapRegionDecoder.newInstance(input, false)
                 try { dec?.decodeRegion(rect, BitmapFactory.Options().apply { inSampleSize = sample }) } finally { dec?.recycle() }
@@ -456,6 +504,37 @@ object SpeciesId {
             val up = Bitmap.createBitmap(bm, 0, 0, bm.width, bm.height, android.graphics.Matrix().apply { postRotate(degrees) }, true)
             if (up !== bm) bm.recycle()
             return up
+        }
+
+        /**
+         * [T-today-species-heat] The whole original, decoded once per sample size and kept
+         * for this look-over. A region decoder re-reads the file and re-decodes it down to the
+         * region on every call: with up to 17 parts per photo, that was 17 passes over a
+         * 13–50 MP JPEG on the big cores for each photo. Same sample size, so the same pixels
+         * reach the model. Parts that need more detail than [WHOLE_MAX_PIXELS] allows (a
+         * small drawn box) still use the region decoder.
+         */
+        private val wholes = HashMap<Int, Bitmap>()
+
+        private fun fromWhole(context: Context, rect: android.graphics.Rect, sample: Int): Bitmap? {
+            if (rawW.toLong() / sample * (rawH / sample) > WHOLE_MAX_PIXELS) return null
+            val whole = wholes[sample] ?: runCatching {
+                context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample }) }
+            }.onFailure { AppLogger.warning(TAG, "whole decode failed: ${it.message}") }.getOrNull()?.also { wholes[sample] = it } ?: return null
+            val sx = whole.width.toFloat() / rawW
+            val sy = whole.height.toFloat() / rawH
+            val x = (rect.left * sx).roundToInt().coerceIn(0, whole.width - 1)
+            val y = (rect.top * sy).roundToInt().coerceIn(0, whole.height - 1)
+            val w = (rect.width() * sx).roundToInt().coerceIn(1, whole.width - x)
+            val h = (rect.height() * sy).roundToInt().coerceIn(1, whole.height - y)
+            // Never hand out the kept bitmap itself: the caller recycles what it gets.
+            return Bitmap.createBitmap(whole, x, y, w, h).let { if (it === whole) whole.copy(whole.config ?: Bitmap.Config.ARGB_8888, false) else it }
+        }
+
+        fun recycle() {
+            preview.recycle()
+            wholes.values.forEach { it.recycle() }
+            wholes.clear()
         }
 
         companion object {
@@ -656,7 +735,11 @@ object SpeciesId {
             addConfigEntry("ep.context_file_path", compileTo.path)
             addConfigEntry("ep.context_embed_mode", "0")
         }
-        addQnn(mapOf("backend_path" to "libQnnHtp.so", "htp_performance_mode" to "burst"))
+        // [T-today-species-heat] Not "burst": it holds the NPU, its rails and the bus at their
+        // top clocks for as long as the session lives (90 s past the last look), and a ~30 ms
+        // look gains nothing from it. On a Xiaomi 25019PNF3C a morning of photos took one NPU
+        // core to 99.6 °C and the skin to 45.6 °C.
+        addQnn(mapOf("backend_path" to "libQnnHtp.so", "htp_performance_mode" to "sustained_high_performance"))
     }
 
     private fun decode(context: Context, uri: Uri): Bitmap? = runCatching {
