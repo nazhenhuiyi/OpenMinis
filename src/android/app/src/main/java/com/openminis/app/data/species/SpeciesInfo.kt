@@ -34,6 +34,8 @@ object SpeciesInfo {
         /** Plain-text summary, null if no article was found. */
         val summary: String?,
         val articleUrl: String?,
+        /** [T-today-wiki-link] Wikipedia's search for its name: where "Read more" goes without an article. */
+        val searchUrl: String,
         /** The species has no article; [summary] is about its genus. */
         val aboutGenus: Boolean,
         /** Share of its sightings in China per month (of the busiest, 0–255), January first; null if unknown. */
@@ -58,6 +60,7 @@ object SpeciesInfo {
         Info(
             summary = wiki?.third,
             articleUrl = wiki?.let { url(lang, it.second) },
+            searchUrl = searchUrl(lang, if (lang == "en") t.latin else t.zh ?: t.latin),
             aboutGenus = wiki != null && wiki.first != t.latin,
             months = SpeciesId.months(context, t.latin),
             sightings = t.count,
@@ -87,6 +90,12 @@ object SpeciesInfo {
             }
         }
         return ofGenus
+    }
+
+    /** Search jumps straight to the article when the name is its title, else lists the matches. */
+    private fun searchUrl(lang: String, query: String): String {
+        val q = URLEncoder.encode(query, "UTF-8").replace("+", "%20")
+        return if (lang == "en") "https://en.m.wikipedia.org/w/index.php?search=$q" else "https://zh.m.wikipedia.org/w/index.php?search=$q&variant=$lang"
     }
 
     private fun url(lang: String, title: String): String {

@@ -2286,6 +2286,7 @@
     <string name="today_nature_genus_note">它自己还没有条目，下面是它所在的属：</string>
     <string name="today_nature_wiki_source">来自维基百科 · 阅读全文</string>
     <string name="today_nature_wiki_none">维基百科上还没有它的介绍。</string>
+    <string name="today_nature_wiki_search">在维基百科搜索</string>
     <string name="today_nature_when">什么时候能见到</string>
     <string name="today_nature_when_peak">%1$s 最常见 · 中国的 iNaturalist 上共 %2$d 条观察</string>
     <string name="today_nature_when_you">绿色是你见到它的月份</string>

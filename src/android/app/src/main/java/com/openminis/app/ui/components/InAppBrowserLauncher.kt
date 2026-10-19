@@ -8,6 +8,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
 import androidx.core.net.toUri
 
 /**
@@ -22,10 +23,19 @@ import androidx.core.net.toUri
  * If a screen reads the ambient outside a host (e.g. during tests), the default
  * implementation falls back to the external Intent so nothing silently no-ops.
  */
-val LocalInAppBrowserLauncher = compositionLocalOf<(String) -> Unit> {
-    // Fallback: if no host is installed above, bail to an external intent so
-    // links at least open somewhere. Hosts must override this.
-    { _ -> }
+val LocalInAppBrowserLauncher = compositionLocalOf<((String) -> Unit)?> { null }
+
+/**
+ * [T-today-wiki-link] The URL opener to call from a screen: the host's when one
+ * is above, else the system browser. The ambient's old default was a silent
+ * no-op (no screen sits under an [InAppBrowserHost]), so the species page's
+ * Wikipedia link was a dead tap; a missing host now still opens the link.
+ */
+@Composable
+fun rememberUrlOpener(): (String) -> Unit {
+    val host = LocalInAppBrowserLauncher.current
+    val context = LocalContext.current
+    return remember(host, context) { host ?: { url: String -> openExternalUrl(context, url) } }
 }
 
 /**

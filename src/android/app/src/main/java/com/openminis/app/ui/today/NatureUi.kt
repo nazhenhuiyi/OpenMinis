@@ -143,7 +143,7 @@ import com.openminis.app.data.photos.CameraPhoto
 import com.openminis.app.data.species.SpeciesId
 import com.openminis.app.data.species.SpeciesInfo
 import com.openminis.app.data.species.isLatinOnly
-import com.openminis.app.ui.components.LocalInAppBrowserLauncher
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -1562,35 +1562,50 @@ private fun Section(title: String) {
     Spacer(Modifier.height(10.dp))
 }
 
-/** The Wikipedia summary, five lines until tapped, with its source. */
+/**
+ * The Wikipedia summary, five lines until tapped, and below it a row that opens
+ * the article in the app — or Wikipedia's search for the name when there is no
+ * article ([T-today-wiki-link]: the link used to go through an ambient nothing
+ * provided, so it never opened).
+ */
 @Composable
 private fun AboutCard(info: SpeciesInfo.Info?) {
-    val openUrl = LocalInAppBrowserLauncher.current
     var open by remember { mutableStateOf(false) }
+    var reading by remember { mutableStateOf<String?>(null) }
     Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceContainerLow, modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.clickable { open = !open }.padding(14.dp)) {
-            val text = info?.summary
-            when {
-                // Read from a local file in a moment: nothing to say meanwhile.
-                info == null -> Unit
-                text == null -> Text(stringResource(R.string.today_nature_wiki_none), fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                else -> {
-                    if (info.aboutGenus) {
-                        Text(stringResource(R.string.today_nature_genus_note), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Spacer(Modifier.height(4.dp))
+        Column {
+            Column(Modifier.fillMaxWidth().clickable { open = !open }.padding(14.dp)) {
+                val text = info?.summary
+                when {
+                    // Read from a local file in a moment: nothing to say meanwhile.
+                    info == null -> Unit
+                    text == null -> Text(stringResource(R.string.today_nature_wiki_none), fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    else -> {
+                        if (info.aboutGenus) {
+                            Text(stringResource(R.string.today_nature_genus_note), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(Modifier.height(4.dp))
+                        }
+                        Text(text, fontSize = 14.sp, lineHeight = 22.sp, maxLines = if (open) Int.MAX_VALUE else 5, overflow = TextOverflow.Ellipsis)
                     }
-                    Text(text, fontSize = 14.sp, lineHeight = 22.sp, maxLines = if (open) Int.MAX_VALUE else 5, overflow = TextOverflow.Ellipsis)
-                    Spacer(Modifier.height(8.dp))
+                }
+            }
+            if (info != null) {
+                Row(
+                    Modifier.fillMaxWidth().clickable { reading = info.articleUrl ?: info.searchUrl }.padding(start = 14.dp, end = 14.dp, top = 2.dp, bottom = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     Text(
-                        stringResource(R.string.today_nature_wiki_source),
-                        fontSize = 12.sp,
+                        stringResource(if (info.articleUrl != null) R.string.today_nature_wiki_source else R.string.today_nature_wiki_search),
+                        fontSize = 13.sp,
                         color = Leaf,
-                        modifier = Modifier.clickable(enabled = info.articleUrl != null) { info.articleUrl?.let(openUrl) },
+                        modifier = Modifier.weight(1f),
                     )
+                    Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, tint = Leaf, modifier = Modifier.size(16.dp))
                 }
             }
         }
     }
+    reading?.let { com.openminis.app.ui.components.UrlPreviewSheet(url = it, onDismiss = { reading = null }) }
 }
 
 /** Twelve bars, January to December; the months the user met it are green. */

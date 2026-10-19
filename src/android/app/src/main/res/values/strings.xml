@@ -2480,6 +2480,7 @@
     <string name="today_nature_genus_note">No article of its own yet — this is about its genus:</string>
     <string name="today_nature_wiki_source">From Wikipedia · Read more</string>
     <string name="today_nature_wiki_none">No Wikipedia article for it yet.</string>
+    <string name="today_nature_wiki_search">Search Wikipedia</string>
     <string name="today_nature_when">When to see it</string>
     <string name="today_nature_when_peak">Most seen in %1$s · %2$d sightings in China on iNaturalist</string>
     <string name="today_nature_when_you">Green: the months you met it</string>
