@@ -12,6 +12,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.util.UUID
 
@@ -219,7 +220,7 @@ object AgentJobRegistry {
             trigger = trigger, target = target, prompt = prompt, then = resolvedThen,
             agentName = agentName, runSessionId = runSessionId, wasResumed = wasResumed,
         )
-        _jobs.value = _jobs.value + (job.id to job)
+        _jobs.update { it + (job.id to job) }
         AppLogger.info(TAG, "REGISTER ${job.logLabel} then=$resolvedThen")
         return job
     }
@@ -462,10 +463,26 @@ object AgentJobRegistry {
         drainQueuedDelegations()
     }
 
-    private fun update(jobId: String, f: (AgentJob) -> AgentJob): AgentJob? {
-        val cur = _jobs.value[jobId] ?: return null
-        val next = f(cur)
-        _jobs.value = _jobs.value + (jobId to next)
+    /**
+     * [T-android-job-registry-atomic] Compare-and-set, never read-then-write.
+     * Parallel delegations register and start on different threads; with a
+     * plain `_jobs.value = _jobs.value + …` one write overwrote the other, and
+     * the lost job could then not be found to stop (its Stop silently did
+     * nothing) nor report RUNNING. [onlyIf] is checked inside the same CAS so
+     * "first terminal state wins" in [finish] holds under concurrency too.
+     */
+    private fun update(
+        jobId: String,
+        onlyIf: (AgentJob) -> Boolean = { true },
+        f: (AgentJob) -> AgentJob,
+    ): AgentJob? {
+        var next: AgentJob? = null
+        _jobs.update { map ->
+            next = null
+            val cur = map[jobId]
+            if (cur == null || !onlyIf(cur)) map
+            else f(cur).let { n -> next = n; map + (jobId to n) }
+        }
         return next
     }
 
@@ -546,7 +563,7 @@ object AgentJobRegistry {
     fun finish(jobId: String, state: AgentJobState, result: String?) {
         val cur = _jobs.value[jobId] ?: return
         if (!cur.isActive) return
-        val job = update(jobId) {
+        val job = update(jobId, onlyIf = { it.isActive }) {
             it.copy(state = state, finishedAtMs = System.currentTimeMillis(), resultText = result)
         } ?: return
         cancelHooks.remove(jobId)
@@ -663,7 +680,7 @@ object AgentJobRegistry {
     /** Drop terminal jobs so the map does not grow without bound. */
     fun pruneFinished(olderThanMs: Long = 3_600_000L) {
         val cutoff = System.currentTimeMillis() - olderThanMs
-        _jobs.value = _jobs.value.filterValues { it.isActive || (it.finishedAtMs ?: it.createdAtMs) >= cutoff }
+        _jobs.update { map -> map.filterValues { it.isActive || (it.finishedAtMs ?: it.createdAtMs) >= cutoff } }
     }
 
     /** Test hook. */

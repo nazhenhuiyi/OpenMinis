@@ -52,7 +52,11 @@ sealed class DeepLinkAction {
     data class OpenTerminal(val initCommand: String?) : DeepLinkAction()
     data class CreateEnvironmentVariable(val key: String, val value: String, val note: String) : DeepLinkAction()
     data object OpenPermissionSettings : DeepLinkAction()
-    data class OpenSession(val sessionId: String) : DeepLinkAction()
+    data class OpenSession(
+        val sessionId: String,
+        /** [T-android-chat-calm-polish] `?focusTask=<child session>`: open at that task's result. */
+        val focusTaskSessionId: String? = null,
+    ) : DeepLinkAction()
 
     /**
      * App-icon long-press quick actions (mirrors iOS QuickActionRouter).
@@ -133,7 +137,10 @@ object DeepLinkHandler {
                 val sid = segments.firstOrNull()
                 when {
                     sid.isNullOrBlank() -> DeepLinkAction.Unknown
-                    segments.size == 1 -> DeepLinkAction.OpenSession(sid)
+                    segments.size == 1 -> DeepLinkAction.OpenSession(
+                        sid,
+                        focusTaskSessionId = uri.getQueryParameter("focusTask")?.takeIf { it.isNotBlank() },
+                    )
                     else -> {
                         val resourcePath = "/" + segments.drop(1).joinToString("/")
                         val title = uri.getQueryParameter("title").orEmpty()

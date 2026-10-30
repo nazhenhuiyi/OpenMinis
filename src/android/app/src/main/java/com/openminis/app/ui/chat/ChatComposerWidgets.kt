@@ -1067,6 +1067,13 @@ internal fun FloatingToolStatusBar(
     // the latest tool — the user may have paged via the chevrons).
     val onOpenCurrentDetail: () -> Unit = { onOpenDetail(block.id) }
 
+    // A successful dispatch is not a completed child. Reuse the card's
+    // payload interpretation, including Interrupted after process death.
+    val helperPhase = if (com.openminis.app.agent.jobs.HelperRunner.isSubAgentToolName(block.toolName) &&
+        !com.openminis.app.agent.jobs.HelperRunner.isControlOnly(block.toolArgs.ifEmpty { null }, block.content.ifEmpty { null })) {
+        parseHelperBlock(block).phase
+    } else null
+    val helperFinished = helperPhase as? HelperPhase.Finished
     val isDone = block.toolStatus == ToolBlockStatus.SUCCESS
     val isFailed = block.toolStatus == ToolBlockStatus.FAILED ||
         block.toolStatus == ToolBlockStatus.TIMEOUT
@@ -1117,6 +1124,8 @@ internal fun FloatingToolStatusBar(
                 )
             } else {
                 val (icon, tint) = when {
+                    helperFinished != null -> helperStatusGlyph(helperFinished.status) to helperStatusColor(helperFinished.status)
+                    helperPhase is HelperPhase.NeverStarted -> Icons.Default.Error to ToolCancelColor
                     isDone -> Icons.Default.CheckCircle to ToolCheckColor
                     isFailed -> Icons.Default.Error to ToolErrorColor
                     isCancelled -> Icons.Default.Close to ToolCancelColor
@@ -1135,7 +1144,11 @@ internal fun FloatingToolStatusBar(
 
             // Tool title
             Text(
-                text = block.toolTitle.ifEmpty { block.toolName },
+                text = buildString {
+                    append(block.toolTitle.ifEmpty { block.toolName })
+                    if (helperFinished != null) append(" · " + helperStatusLabel(helperFinished))
+                    if (helperPhase is HelperPhase.NeverStarted) append(" · " + stringResource(R.string.agent_status_never_started))
+                },
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Medium,
                 color = ChatColors.primaryText,

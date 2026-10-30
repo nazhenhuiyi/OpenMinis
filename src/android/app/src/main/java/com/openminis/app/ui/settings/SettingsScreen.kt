@@ -35,6 +35,7 @@ import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.FolderShared
 import androidx.compose.material.icons.outlined.FrontHand
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Palette
@@ -58,6 +59,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -315,6 +317,25 @@ fun SettingsScreen(
                     title = stringResource(R.string.settings_section_logs),
                     subtitle = stringResource(R.string.settings_logs_subtitle),
                     onClick = onLogsClick,
+                    showDivider = false,
+                )
+            }
+
+            // -- Advanced -- [T-android-chat-calm] Developer mode brings back the
+            // detailed chat (tool steps, timings, agent cards, model name, usage).
+            SettingsSection(
+                title = stringResource(R.string.settings_section_advanced),
+                footer = stringResource(R.string.settings_developer_mode_footer),
+            ) {
+                remember { com.openminis.app.ui.chat.ChatDeveloperMode.ensureLoaded(context) }
+                val developerMode by com.openminis.app.ui.chat.ChatDeveloperMode.enabled.collectAsState()
+                SettingsSwitchRow(
+                    title = stringResource(R.string.settings_developer_mode),
+                    subtitle = stringResource(R.string.settings_developer_mode_subtitle),
+                    checked = developerMode,
+                    onCheckedChange = { com.openminis.app.ui.chat.ChatDeveloperMode.set(context, it) },
+                    icon = Icons.Outlined.Code,
+                    iconColor = Color(0xFF8E8E93),
                     showDivider = false,
                 )
             }

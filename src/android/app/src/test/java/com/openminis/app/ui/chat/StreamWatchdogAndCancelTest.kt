@@ -301,7 +301,7 @@ class StreamWatchdogAndCancelTest {
 
     @Test
     fun `production cancelStream keeps the mute → drop → cancel order`() {
-        val body = vmSrc.substringAfter("fun cancelStream() {").substringBefore("streamJob?.cancel()")
+        val body = vmSrc.substringAfter("fun cancelStream(stopBackgroundTasks: Boolean = true) {").substringBefore("streamJob?.cancel()")
         val mute = body.indexOf("AgentJobRegistry.muteDelegationResults(activeSessionId)")
         val drop = body.indexOf("AgentJobRegistry.dropQueuedDelegations(activeSessionId, \"user-stopped\")")
         val cancel = body.indexOf("AgentJobRegistry.cancelAll(activeSessionId, \"user-stopped\")")
@@ -309,7 +309,7 @@ class StreamWatchdogAndCancelTest {
         assertTrue("drop must come before cancel", drop in 0 until cancel)
         assertTrue(
             "the streaming flag flips only after the fan-out is stopped",
-            vmSrc.substringAfter("fun cancelStream() {").indexOf("_isStreaming.value = false") > cancel,
+            vmSrc.substringAfter("fun cancelStream(stopBackgroundTasks: Boolean = true) {").indexOf("_isStreaming.value = false") > cancel,
         )
     }
 }

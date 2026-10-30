@@ -281,4 +281,58 @@ class AgentJobRegistryTest {
         assertTrue(AgentJobRegistry.hasAgentWork("P"))
     }
 
+    /**
+     * [T-android-job-registry-atomic] Two delegations of one turn register and
+     * start on different threads. A read-then-write map update lost one of
+     * them, so its Stop found no job and did nothing (seen on device: one of
+     * two parallel tasks could not be stopped from its line).
+     */
+    @Test
+    fun `parallel register and start never lose a job`() {
+        val pool = java.util.concurrent.Executors.newFixedThreadPool(8)
+        try {
+            repeat(20) { round ->
+                AgentJobRegistry.resetForTest()
+                val gate = java.util.concurrent.CountDownLatch(1)
+                val futures = (0 until 16).map { n ->
+                    pool.submit<AgentJob> {
+                        gate.await()
+                        val j = child()
+                        AgentJobRegistry.markRunning(j.id, "S-$round-$n")
+                        j
+                    }
+                }
+                gate.countDown()
+                val jobs = futures.map { it.get() }
+                assertEquals(16, AgentJobRegistry.list().size)
+                jobs.forEachIndexed { n, j ->
+                    val found = AgentJobRegistry.jobForSession("S-$round-$n")
+                    assertEquals("job $n of round $round must be findable to stop", j.id, found?.id)
+                    assertEquals(AgentJobState.RUNNING, found?.state)
+                }
+            }
+        } finally {
+            pool.shutdownNow()
+        }
+    }
+
+    @Test
+    fun `concurrent finishes keep the first terminal state`() {
+        val pool = java.util.concurrent.Executors.newFixedThreadPool(4)
+        try {
+            repeat(50) {
+                AgentJobRegistry.resetForTest()
+                val j = child()
+                val gate = java.util.concurrent.CountDownLatch(1)
+                val states = listOf(AgentJobState.DONE, AgentJobState.CANCELLED, AgentJobState.FAILED, AgentJobState.TIMEOUT)
+                val fs = states.map { st -> pool.submit { gate.await(); AgentJobRegistry.finish(j.id, st, st.name) } }
+                gate.countDown(); fs.forEach { it.get() }
+                val got = AgentJobRegistry.job(j.id)!!
+                assertEquals("state and result come from the same single winner", got.state.name, got.resultText)
+            }
+        } finally {
+            pool.shutdownNow()
+        }
+    }
+
 }

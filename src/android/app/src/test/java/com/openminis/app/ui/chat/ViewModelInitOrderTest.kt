@@ -105,6 +105,8 @@ class ViewModelInitOrderTest {
         for ((i, line) in lines.withIndex()) {
             val lineNo = i + 1
             if (lineNo <= init) continue
+            // Stop at the class boundary; indented locals in top-level helpers are not fields.
+            if (line == "}") break
             val m = Regex("""^    (?:private |internal )?(?:val|var) (\w+)\s*(?::[^=]+)?=""")
                 .find(line) ?: continue
             if ("by lazy" in line) continue

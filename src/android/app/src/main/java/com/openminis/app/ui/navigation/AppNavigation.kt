@@ -94,6 +94,7 @@ private val EmphasizedAccelerate = CubicBezierEasing(0.3f, 0.0f, 0.8f, 0.15f)
 
 object Routes {
     const val SESSION_LIST = "sessions"
+    const val CHAT_HISTORY = "chat_history"
     const val CHAT = "chat/{sessionId}"
     const val SETTINGS = "settings"
     const val PROVIDER_LIST = "providers"
@@ -275,6 +276,14 @@ fun AppNavigation(
                 navController.safeNavigate(Routes.terminal(initialDeepLink.initCommand))
             }
             is DeepLinkAction.OpenSession -> {
+                initialDeepLink.focusTaskSessionId?.let {
+                    com.openminis.app.ui.chat.ChatResultFocus.request(initialDeepLink.sessionId, it)
+                }
+                if (initialDeepLink.sessionId == ChatRepository.MAIN_CONVERSATION_ID) {
+                    // Main conversation = the Chat tab's root (see MainActivity).
+                    com.openminis.app.ui.today.MainTabs.select(com.openminis.app.ui.today.MainTabs.Tab.CHAT)
+                    return@LaunchedEffect
+                }
                 // T-double-chat-fix: on process-death recreation NavController
                 // auto-restores [SESSION_LIST, chat/<id>] AND MainActivity
                 // synthesizes an OpenSession deep-link from saved state. A
@@ -446,7 +455,9 @@ fun AppNavigation(
                 // [T-today-tab] A stale session no longer opens a blank draft:
                 // the app lands on Today (SPEC §1), and the chat tab shows the
                 // session list as before.
-                if (fresh) Routes.chat(latest.id) else null
+                // The fixed conversation already lives at the root. Auto
+                // resume must not push a duplicate chat and hide the tab bar.
+                if (fresh && latest.id != ChatRepository.MAIN_CONVERSATION_ID) Routes.chat(latest.id) else null
             }
         }
         if (target != null) {
@@ -497,7 +508,8 @@ fun AppNavigation(
     // draft chat, seeding the pending action so ChatScreen consumes it on
     // its first LaunchedEffect tick. Mirrors the htmlShortcut path —
     // avoids a sessions-list flash and a duplicate back-stack entry.
-    val quickActionStart: String? = when (initialDeepLink) {
+    // One draft per launch, not per recomposition of the navigation host.
+    val quickActionStart: String? = remember(initialDeepLink) { when (initialDeepLink) {
         is DeepLinkAction.NewVoiceChat -> {
             DeepLinkCoordinator.setPendingChatAction(
                 DeepLinkCoordinator.ChatAction.START_VOICE,
@@ -512,7 +524,7 @@ fun AppNavigation(
         }
         is DeepLinkAction.NewChat -> Routes.chat("__new__${java.util.UUID.randomUUID()}")
         else -> null
-    }
+    } }
     val startDestination = when {
         htmlShortcut != null -> {
             // Seed coordinator before NavHost composition so ChatScreen sees
@@ -535,8 +547,12 @@ fun AppNavigation(
     val currentRoute = currentEntry?.destination?.route
     // Today and Explore (§20) are both overlays; only chat is the NavHost.
     val overlayTab = currentTab != com.openminis.app.ui.today.MainTabs.Tab.CHAT
+    // [T-android-chat-calm-polish] A chat under the Today / Explore overlay is
+    // still resumed but not on screen; task-done notices need to know.
+    LaunchedEffect(overlayTab) { com.openminis.app.ui.chat.ChatScreenPresence.chatTab(!overlayTab) }
     val tabStates = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
-    val chatAtRoot = (currentRoute == Routes.SESSION_LIST || currentRoute == Routes.CHAT) && chatListVisible
+    val chatAtRoot = currentRoute == Routes.SESSION_LIST ||
+        ((currentRoute == Routes.CHAT || currentRoute == Routes.CHAT_HISTORY) && chatListVisible)
     // The bar stays in the layout while the keyboard is up (the keyboard simply
     // covers it). Hiding it on IME used to make the composer drop to the very
     // bottom as the keyboard closed and then jump up when the bar came back.
@@ -667,11 +683,21 @@ fun AppNavigation(
         composable(Routes.SESSION_LIST) {
             ChatSplitScaffoldRoute(
                 initialSessionId = null,
+                mainConversation = true,
                 navController = navController,
                 chatRepository = chatRepository,
                 providerRepository = providerRepository,
                 memoryRepository = memoryRepository,
                 skillRepository = skillRepository,
+                mcpRepository = mcpRepository,
+            )
+        }
+
+        composable(Routes.CHAT_HISTORY) {
+            ChatSplitScaffoldRoute(
+                initialSessionId = null, navController = navController,
+                chatRepository = chatRepository, providerRepository = providerRepository,
+                memoryRepository = memoryRepository, skillRepository = skillRepository,
                 mcpRepository = mcpRepository,
             )
         }
@@ -1662,7 +1688,19 @@ fun AppNavigation(
     }
     } // content box
     if (showTabBar) {
-        com.openminis.app.ui.today.MainTabBar(currentTab) { com.openminis.app.ui.today.MainTabs.select(it) }
+        com.openminis.app.ui.today.MainTabBar(currentTab) { tab ->
+            if (tab == com.openminis.app.ui.today.MainTabs.Tab.CHAT && currentRoute != Routes.SESSION_LIST) {
+                if (!navController.popBackStack(Routes.SESSION_LIST, inclusive = false)) {
+                    // Quick-action launches can start directly at CHAT, with
+                    // no root entry underneath. The tab still means main chat.
+                    navController.navigate(Routes.SESSION_LIST) {
+                        popUpTo(navController.graph.startDestinationId) { inclusive = true }
+                        launchSingleTop = true
+                    }
+                }
+            }
+            com.openminis.app.ui.today.MainTabs.select(tab)
+        }
     }
     } // column
 }

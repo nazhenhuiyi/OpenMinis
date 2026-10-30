@@ -44,6 +44,21 @@ class ChatRepository(internal val dao: ChatDao) {
 
     suspend fun getSession(id: String): ChatSessionEntity? = dao.getSession(id)
 
+    /** A real, persisted root session. Its reserved ID also survives backup/restore.
+     * INSERT IGNORE is atomic across repository instances; never REPLACE a live row.
+     * Existing conversations keep their identities and messages.
+     */
+    suspend fun mainConversation(modelId: String, memoryEnabled: Boolean): ChatSessionEntity {
+        dao.getSession(MAIN_CONVERSATION_ID)?.let { return it }
+        val now = System.currentTimeMillis()
+        dao.insertSessionIfAbsent(ChatSessionEntity(
+            id = MAIN_CONVERSATION_ID, title = "Minis", modelId = modelId,
+            createdAt = now, updatedAt = now, memoryEnabled = if (memoryEnabled) 1 else 0,
+        ))
+        return requireNotNull(dao.getSession(MAIN_CONVERSATION_ID))
+    }
+
+
     /** All persisted token_usage JSON strings for a session (one per LLM call). */
     suspend fun sessionTokenUsages(sessionId: String): List<String> = dao.tokenUsages(sessionId)
 
@@ -910,6 +925,7 @@ class ChatRepository(internal val dao: ChatDao) {
     }
 
     companion object {
+        const val MAIN_CONVERSATION_ID = "openminis-main-conversation"
         /** [T-android-error-persist-current-turn] parts_json of an error-carrier row. */
         internal const val ERROR_CARRIER_PARTS_JSON = "[]"
 

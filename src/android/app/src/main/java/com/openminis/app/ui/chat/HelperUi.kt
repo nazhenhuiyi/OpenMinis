@@ -1324,11 +1324,8 @@ fun AgentTranscriptScreen(sessionId: String, onBack: () -> Unit) {
                 actions = {
                     if (isStreaming) {
                         IconButton(onClick = {
-                            // [T-android-stop-sibling-subagent] Stop the whole
-                            // fan-out this run belongs to, matching the card's
-                            // Stop; a run with no delegating parent still stops
-                            // just itself.
-                            job?.let { AgentJobRegistry.cancelSiblings(sessionId, "user-stop-transcript") }
+                            // Cancel this child, matching its task card.
+                            job?.let { AgentJobRegistry.cancel(it.id, "user-stop-transcript") }
                                 ?: vm.cancelStream()
                         }) {
                             Icon(Icons.Outlined.StopCircle, contentDescription = stringResource(R.string.helper_stop), tint = HelperStatusRed)

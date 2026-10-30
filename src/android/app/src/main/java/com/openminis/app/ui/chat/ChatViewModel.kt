@@ -6336,6 +6336,12 @@ class ChatViewModel(
                 }
             }
 
+            // A main conversation may predate provider setup; use the same
+            // last-used/newest entry fallback as a fresh draft when unbound.
+            if (!resolved && activeSessionId == ChatRepository.MAIN_CONVERSATION_ID) {
+                applyNewChatDefaultModel()
+            }
+
             // [T-HANG-DIAG] measure DB load + transform separately so a long
             // load on one stage is obvious in the trace.
             //
@@ -9043,7 +9049,13 @@ class ChatViewModel(
         // [T-android-stop-sibling-subagent] New work in this session lifts the
         // stop: delegations from here on may drive the turn again.
         com.openminis.app.agent.jobs.AgentJobRegistry.clearDelegationMute(activeSessionId)
-        sendMessage(text, skipContextCheck = false, headless = false)
+        val outcome = sendMessage(text, skipContextCheck = false, headless = false)
+        // The composer clears before submitting. A refusal must leave the user's
+        // message editable, including during compact/provider setup.
+        if (outcome is SubmitOutcome.Rejected &&
+            outcome.reason != "awaiting_user_compact_decision" && text.isNotBlank()) {
+            _inputText.value = text
+        }
     }
 
     /**
@@ -10719,6 +10731,7 @@ class ChatViewModel(
         // stops while the interrupted task is unfinished, one hidden resume
         // nudge is sent (iOS c9131e862 scheduledResumeNudgeOwed).
         var scheduledResumeNudgeOwed = false
+        val insertedTaskCheck = InsertedTaskCheck()
         // [T-android-readaloud-stop-stale] One-shot per REPLY (not per turn):
         // the first text delta stops any Read Aloud still playing from the
         // previous reply. Scoped outside the turn loop so a tool-loop reply
@@ -12376,9 +12389,13 @@ class ChatViewModel(
                 // flag when user prompts are injected at turn end).
                 val cleanStop = turnFinishReason == "stop" || turnFinishReason == "end_turn"
                 val userPromptWaiting = _promptQueue.value.any { it.origin == QueuedPromptOrigin.USER }
-                if (scheduledResumeNudgeOwed && !isEmptyTurn && cleanStop && !userPromptWaiting) {
+                val userTaskCheck = insertedTaskCheck.takeIfReady(
+                    empty = isEmptyTurn, cleanStop = cleanStop, userWaiting = userPromptWaiting,
+                    turn = turn, cap = turnCap,
+                )
+                if ((scheduledResumeNudgeOwed && !isEmptyTurn && cleanStop && !userPromptWaiting) || userTaskCheck != null) {
                     scheduledResumeNudgeOwed = false
-                    val nudge = ChatMessage.SCHEDULED_RESUME_NUDGE_TEXT
+                    val nudge = userTaskCheck ?: ChatMessage.SCHEDULED_RESUME_NUDGE_TEXT
                     agentHistory.add(
                         LLMMessage(
                             role = LLMMessage.Role.USER,
@@ -12398,7 +12415,7 @@ class ChatViewModel(
                     }
                     AppLogger.info(
                         TAG_STREAM,
-                        "⏰[ScheduledPreempt] model stopped after an inserted scheduled fire — sent the one-shot resume nudge (turn=$turn)",
+                        "⏰[ScheduledPreempt] model stopped after an inserted message — sent the one-shot unfinished-work check (turn=$turn)",
                     )
                     continue
                 }
@@ -12969,6 +12986,7 @@ class ChatViewModel(
                     // scheduled insert; a user follow-up decides for itself
                     // what happens to the interrupted task.
                     scheduledResumeNudgeOwed = scheduledFire != null
+                    insertedTaskCheck.inserted(isScheduled = scheduledFire != null)
                     // Switch loop-scope state to the new bubble. Subsequent
                     // iterations populate `handled.newAssistantId` and slice
                     // `allToolBlocks` from the freshly-zeroed start index
@@ -13106,8 +13124,13 @@ class ChatViewModel(
                 }
                 result
             }
-            FileWriteTool.NAME -> FileWriteTool.execute(argsJson, fsSessionId, context).also {
-                if (it.success) maybeReloadSkillsForPath(argsJson)
+            FileWriteTool.NAME -> FileWriteTool.execute(argsJson, fsSessionId, context).let { result ->
+                if (result.success) {
+                    maybeReloadSkillsForPath(argsJson)
+                    val path = runCatching { JSONObject(argsJson).optString("path") }.getOrDefault("")
+                    val url = linuxPathToMinisURL(path)
+                    if (url != null) result.copy(output = result.output + "\nminis_url: $url") else result
+                } else result
             }
             FileEditTool.NAME -> FileEditTool.execute(argsJson, fsSessionId, context).also {
                 if (it.success) maybeReloadSkillsForPath(argsJson)
@@ -13484,7 +13507,7 @@ class ChatViewModel(
             clearDelegateOverride(toolId)
             return reject("child_start_failed", "The helper session could not resolve a provider.")
         }
-        val outcome = withContext(Dispatchers.Main) { childVm.submitPrompt(hr.childPrompt(args)) }
+        val outcome = withContext(Dispatchers.Main) { childVm.submitPrompt(hr.childPrompt(args, _messages.value.filter { it.role == "user" && !it.isQueued && !it.content.trimStart().startsWith("<agent_callback") }.takeLast(6).map { it.content })) }
         if (outcome !is SubmitOutcome.Sent) {
             registry.setThen(job.id, com.openminis.app.agent.jobs.AgentJobThen.None)
             registry.finish(job.id, com.openminis.app.agent.jobs.AgentJobState.FAILED, null)
@@ -15193,10 +15216,10 @@ Memory system (currently DISABLED):
         // place for finding files and searching their contents, and steers the
         // model to rg (not in the default rootfs, hence the install-once step).
         // Mirrors iOS AIChatViewModel.baseSystemPrompt.
-        val base = identitySection + """You should proactively use shell commands to accomplish the user's tasks — installing packages (apk add), writing and running scripts, managing files, networking, and any other operations a Linux terminal can perform.
+        val base = identitySection + """Use the available tools to accomplish the user's task within the user's instructions. Check existing capabilities before choosing an approach.
 
 Available tools:
-- shell_execute: Run any shell command. Each invocation is an isolated process with stdout/stderr captured. Prefer this for most tasks — it is a real Linux environment with persistent filesystem. Common tools (python3, pip, curl, wget, git, ssh, etc.) can be installed via apk add; Python packages via pip install. Use `which <cmd>` to check if a tool is already installed before running apk add — many packages persist across sessions. When you need to wait before checking results (e.g. polling, waiting for a process), use the `delay` parameter instead of `sleep` in the command — delay blocks the agent flow without occupying the shell, so other concurrent tasks can use it during the wait. This avoids resource contention. Execution discipline for long-running or dispatched work: make tool calls immediately instead of describing intentions, and keep working until the task is complete. Within a turn, `delay` is your wait mechanism — to follow up on something still running, chain delay-then-check calls at a task-appropriate interval until you have the result or hit a sensible retry cap. For a check that should happen AFTER this turn ends, register it by running `minis-scheduled create …` via shell_execute (see the CLI list) — it fires a new turn at the scheduled time through a system alarm. NEVER end a turn with a promise of future action: 'I'll keep monitoring', 'will sync the result later', and ending right after a single still-running status check with 'let's keep waiting' are all the same violation — once your turn ends, NOTHING runs until the user's next message. If polling to completion is genuinely not worth blocking the turn, close honestly instead: either register a `minis-scheduled` follow-up (say so, with its task id) or state that you will only learn the outcome when the user next messages; see 'Scheduled tasks' later in this prompt.
+- shell_execute: Run any shell command. Each invocation is an isolated process with stdout/stderr captured. Prefer this for most tasks — it is a real Linux environment with persistent filesystem. Check availability with `command -v <cmd>`. A missing tool is not permission to install it: prefer available tools or explain the limitation. Package installation (apk add / pip install) may use the network and change the environment; only do it when consistent with the user's instructions and authorization. A user request to install a package is valid authorization unless other restrictions conflict. When you need to wait before checking results (e.g. polling, waiting for a process), use the `delay` parameter instead of `sleep` in the command — delay blocks the agent flow without occupying the shell, so other concurrent tasks can use it during the wait. This avoids resource contention. Execution discipline for long-running or dispatched work: make tool calls immediately instead of describing intentions, and keep working until the task is complete. Within a turn, `delay` is your wait mechanism — to follow up on something still running, chain delay-then-check calls at a task-appropriate interval until you have the result or hit a sensible retry cap. For a check that should happen AFTER this turn ends, register it by running `minis-scheduled create …` via shell_execute (see the CLI list) — it fires a new turn at the scheduled time through a system alarm. NEVER end a turn with a promise of future action: 'I'll keep monitoring', 'will sync the result later', and ending right after a single still-running status check with 'let's keep waiting' are all the same violation — once your turn ends, NOTHING runs until the user's next message. If polling to completion is genuinely not worth blocking the turn, close honestly instead: either register a `minis-scheduled` follow-up (say so, with its task id) or state that you will only learn the outcome when the user next messages; see 'Scheduled tasks' later in this prompt.
 - file_read: Read file contents (faster than cat).
 - file_write: Create new files or overwrite existing files (faster than echo/tee).
 - file_edit: Edit existing files with exact string replacement (old_string → new_string). Preferred over file_write for modifications — always file_read first.
@@ -15241,7 +15264,7 @@ File creation guidelines:
 - Also (BusyBox ash, NOT bash): brace expansion ({a,b,c}) and bash arrays (arr=(...), ${'$'}{arr[@]}) are unsupported — use space-separated strings with a for loop or multiple arguments instead.
 - Python packages: many PyPI packages (numpy, pandas, scipy, pillow, etc.) lack musllinux_aarch64 wheels and will fail to build from source. Use Alpine's native packages instead: `apk search py3-<name>` then `apk add py3-numpy py3-pandas py3-matplotlib py3-pillow py3-scipy py3-requests`. Only fall back to `pip install` for pure-Python packages not available via apk. For matplotlib, always set `matplotlib.use('Agg')` before importing pyplot — there is no display server in the sandbox.
 - Background services: each shell_execute runs in an isolated process. When starting a background server (e.g. `python3 -m http.server &`), you MUST redirect stdout/stderr to avoid SIGPIPE when the shell exits: `python3 -m http.server 8765 > /dev/null 2>&1 &`. Without redirection the server dies silently after the command finishes.
-- File search & text scanning: use ripgrep (`rg`) for EVERY scan of files — finding names, keyword/regex search, field extraction, log analysis — on one file or a whole tree. Never use grep/awk/sed/find here, rg is far faster. Contents: `rg -n 'pattern' <dir>` (`-i` ignore case, `-w` whole word, `-F` literal, `-l` file names only, `-t py` or `-g '*.md'` to filter files). File names: `rg --files <dir> -g '*.pdf'`, or `rg --files <dir> | rg 'name'`. rg skips hidden, .gitignored and binary files by default; add `-uuu` to search everything. If `which rg` finds nothing, install it once with `apk add ripgrep`. `**` recursive glob (globstar) is not supported by the shell — use rg instead. When looking for user files, do NOT scan the whole filesystem: search /var/minis/ first (workspace/attachments/shared for the current session, mounts/* for user-provided external folders), and widen the scope only if the file is clearly not there.
+- File search & text scanning: Prefer ripgrep (`rg`) when available for finding files and searching text. Contents: `rg -n 'pattern' <dir>` (`-i` ignore case, `-w` whole word, `-F` literal, `-l` file names only, `-t py` or `-g '*.md'` to filter files). File names: `rg --files <dir> -g '*.pdf'`, or `rg --files <dir> | rg 'name'`. rg skips hidden, .gitignored and binary files by default; add `-uuu` to search everything. If rg is absent, use existing ls/find/grep/awk/sed or file_read. Do not install search tools just to follow this preference, especially for offline tasks. `**` recursive glob (globstar) is not supported by the shell — use rg instead. When looking for user files, do NOT scan the whole filesystem: search /var/minis/ first (workspace/attachments/shared for the current session, mounts/* for user-provided external folders), and widen the scope only if the file is clearly not there.
 
 Tool call style:
 - Default: do not narrate routine, low-risk tool calls — just call the tool directly.
@@ -15328,6 +15351,13 @@ Scheduled tasks: crontab / at / nohup loops will stop when the app is suspended,
 
         return buildString {
             append(base)
+            append("\n\n")
+            append(ChatExecutionGuidance.PROMPT)
+            if (activeSessionId == ChatRepository.MAIN_CONVERSATION_ID) {
+                append("\n\nThis is the user's ongoing main conversation. Accept changes of topic naturally; keep replies and task results in this conversation. ")
+                if (delegationOffered) append("For lengthy independent work, use subagent_task with wait=false, acknowledge the task and remain available for other conversation. Its real completion callback returns here; never invent task status or results. ")
+                append("Background tasks run only while this app process can execute; never promise execution after process death. A stopped task stays stopped unless the user explicitly asks to resume it.")
+            }
             if (skillFragment != null) {
                 append("\n\n")
                 append(skillFragment)
@@ -16404,7 +16434,7 @@ Scheduled tasks: crontab / at / nohup loops will stop when the app is suspended,
         SessionActivityTracker.publishLastReply(sessionId, text)
     }
 
-    fun cancelStream() {
+    fun cancelStream(stopBackgroundTasks: Boolean = true) {
         AppLogger.info(TAG_STREAM, "cancelStream invoked _isStreaming=false (sid=$activeSessionId)")
         // [T-android-context-usage-hint] Suppress this turn's usage line — see
         // [lastTurnWasCancelled]. Set before `_isStreaming = false` below, so
@@ -16420,9 +16450,11 @@ Scheduled tasks: crontab / at / nohup loops will stop when the app is suspended,
         // already finished cannot re-wake this turn), then drop the queue
         // before cancelling, because each cancel drains the queue and would
         // otherwise start the very delegations being stopped.
-        com.openminis.app.agent.jobs.AgentJobRegistry.muteDelegationResults(activeSessionId)
-        com.openminis.app.agent.jobs.AgentJobRegistry.dropQueuedDelegations(activeSessionId, "user-stopped")
-        com.openminis.app.agent.jobs.AgentJobRegistry.cancelAll(activeSessionId, "user-stopped")
+        if (stopBackgroundTasks) {
+            com.openminis.app.agent.jobs.AgentJobRegistry.muteDelegationResults(activeSessionId)
+            com.openminis.app.agent.jobs.AgentJobRegistry.dropQueuedDelegations(activeSessionId, "user-stopped")
+            com.openminis.app.agent.jobs.AgentJobRegistry.cancelAll(activeSessionId, "user-stopped")
+        }
         streamJob?.cancel()
         _isStreaming.value = false
         // T-streaming-side-channel: flush any in-flight delta back into the

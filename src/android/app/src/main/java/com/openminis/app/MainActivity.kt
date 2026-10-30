@@ -737,6 +737,21 @@ class MainActivity : ComponentActivity() {
                 nav.navigate(Routes.terminal(action.initCommand))
             }
             is DeepLinkAction.OpenSession -> {
+                // [T-android-chat-calm-polish] A task-done notification opens
+                // the chat at that task's result.
+                action.focusTaskSessionId?.let {
+                    com.openminis.app.ui.chat.ChatResultFocus.request(action.sessionId, it)
+                }
+                // The main conversation lives at the Chat tab's root, with
+                // the tab bar; pushing it as a full-screen chat would hide
+                // the bar and stack a second copy of the same conversation.
+                if (action.sessionId == com.openminis.app.data.repository.ChatRepository.MAIN_CONVERSATION_ID) {
+                    if (!nav.popBackStack(Routes.SESSION_LIST, inclusive = false)) {
+                        nav.navigate(Routes.SESSION_LIST) { launchSingleTop = true }
+                    }
+                    com.openminis.app.ui.today.MainTabs.select(com.openminis.app.ui.today.MainTabs.Tab.CHAT)
+                    return
+                }
                 // T-double-chat-fix (secondary): mirror AppNavigation's
                 // OpenSession options so a runtime deep-link (notification /
                 // shortcut / onNewIntent) can't stack a duplicate chat on

@@ -885,7 +885,17 @@ data class SelectionToolbarActions(
      * half-arrived answer would narrate a truncated text.
      */
     val onReadFromStart: ((String) -> Unit)? = null,
+    /**
+     * [T-android-chat-calm-polish] Whole-reply actions for the message the
+     * selection sits in ("分享", "重新回答"), appended after the copy / read
+     * entries. Given the selection's single message id (null when it spans
+     * several messages); return the entries that apply, or none.
+     */
+    val replyActions: ((messageId: String?) -> List<SelectionReplyAction>)? = null,
 )
+
+/** One whole-reply entry on the selection bar; see [SelectionToolbarActions.replyActions]. */
+data class SelectionReplyAction(val label: String, val onClick: () -> Unit)
 
 @Composable
 fun MinisSelectionToolbarHost(
@@ -1247,6 +1257,12 @@ fun MinisSelectionToolbarHost(
                         add(SelectionAction(labelCopyTableImage) {
                             tableActions.copyTableImage()
                             controller.clearSelection()
+                        })
+                    }
+                    actions?.replyActions?.invoke(controller.singleMessageId())?.forEach { extra ->
+                        add(SelectionAction(extra.label) {
+                            controller.clearSelection()
+                            extra.onClick()
                         })
                     }
                 }

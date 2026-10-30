@@ -51,6 +51,7 @@ import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.sample
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -94,6 +95,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Menu
@@ -154,6 +157,7 @@ import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.CloseFullscreen
 import androidx.compose.material.icons.outlined.Tag
 import androidx.compose.material.icons.outlined.Psychology
+import androidx.compose.material.icons.outlined.Layers
 import androidx.compose.material.icons.outlined.Handyman
 import androidx.compose.material.icons.outlined.Extension
 import androidx.compose.material.icons.outlined.Folder
@@ -517,6 +521,8 @@ fun ChatScreen(
     skillRepository: com.openminis.app.data.repository.SkillRepository? = null,
     mcpRepository: com.openminis.app.data.repository.MCPRepository? = null,
     onBack: () -> Unit,
+    isMainConversation: Boolean = false,
+    onOpenSettings: () -> Unit = {},
     /**
      * [T-android-tablet-split] True when this chat is rendered as the DETAIL
      * pane beside the session list. The back arrow is suppressed then: it means
@@ -596,6 +602,28 @@ fun ChatScreen(
     // Callers needing the full history (compact / fork / regenerate / send)
     // continue to read viewModel.messages directly inside the VM.
     val messages by viewModel.uiMessages.collectAsState()
+    // [T-android-chat-calm] Settings › Advanced › Developer mode. Off: the
+    // everyday chat (quiet task lines, background capsule, file cards); on: the
+    // detailed renderer below, unchanged.
+    val developerMode = rememberChatDeveloperMode()
+    // Every delegation of this conversation, live turn included. Only the
+    // everyday chat reads it (capsule, sheet, callback dedup).
+    //
+    // [T-android-chat-calm-polish] Derived off the composition: reading
+    // streamingById with collectAsState here recomposed this whole screen on
+    // every streamed token (the side channel exists to avoid exactly that —
+    // see T-streaming-side-channel). Now the screen recomposes only when the
+    // task list itself changes.
+    var calmTasks by remember(viewModel) { mutableStateOf<List<CalmTask>>(emptyList()) }
+    LaunchedEffect(viewModel, messages, developerMode) {
+        if (developerMode) { calmTasks = emptyList(); return@LaunchedEffect }
+        viewModel.streamingById
+            .map { stream -> collectCalmTasks(if (stream.isEmpty()) messages else mergeStreamingOverlay(messages, stream)) }
+            .distinctUntilChanged()
+            .collect { calmTasks = it }
+    }
+    val calmCapsule = remember(calmTasks) { backgroundCapsule(calmTasks, System.currentTimeMillis()) }
+    var showBackgroundTasksSheet by remember { mutableStateOf(false) }
     // [T-android-usage-capsule-style] Which replies currently show their usage
     // capsule. Empty by default — it is revealed by tapping the reply's tail.
     val revealedUsageIds by viewModel.revealedUsageIds.collectAsState()
@@ -1457,6 +1485,49 @@ fun ChatScreen(
     // flatten, and reading it here must not subscribe this lambda to
     // recomposition.
     val flatRowIndexByKey = remember(sessionId) { mutableStateOf<Map<String, Int>>(emptyMap()) }
+
+    // [T-android-chat-calm-polish] Bring one row (by its item key) into view,
+    // its top a little below the top bar: "看结果" on a task line and a tap on a
+    // task-done notification. Same index arithmetic as the up button below —
+    // the map counts oldest-first, the list renders newest-first, and the
+    // leading conditional items are measured from what is on screen. A row
+    // the map does not know (not flattened yet) is a no-op.
+    val scrollToRowKey: suspend (source: String, key: String) -> Boolean = scrollToRowKey@{ source, key ->
+        val info = listState.layoutInfo
+        info.visibleItemsInfo.firstOrNull { it.key == key }?.let { hit ->
+            if (hit.offset >= info.viewportStartOffset && hit.offset + hit.size <= info.viewportEndOffset) return@scrollToRowKey true
+        }
+        val map = flatRowIndexByKey.value
+        val flat = map[key] ?: return@scrollToRowKey false
+        val lastFlat = (map.size - 1).coerceAtLeast(0)
+        fun rowIndex(): Int {
+            val lead = listState.layoutInfo.visibleItemsInfo.firstNotNullOfOrNull { item ->
+                (item.key as? String)?.let { map[it] }?.let { f -> item.index - (lastFlat - f) }
+            } ?: 0
+            return ((lastFlat - flat) + lead).coerceAtLeast(0)
+        }
+        userScrolledAway = true
+        val viewport = info.viewportEndOffset - info.viewportStartOffset
+        val index = rowIndex()
+        tracedScrollToItem(source, index, 0)
+        // The leading items are measured from what was on screen; after a
+        // long jump measure again from the new viewport and settle.
+        var hit = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == key }
+        if (hit == null) {
+            tracedScrollToItem(source, rowIndex(), 0)
+            hit = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == key }
+        }
+        AppLogger.info("ChatCalm", "scrollToRowKey src=$source flat=$flat/$lastFlat index=$index hit=${hit?.index}@${hit?.offset} viewport=$viewport")
+        if (hit == null) return@scrollToRowKey false
+        // reverseLayout: the row now sits at the bottom edge; lift it into the
+        // upper part of the screen, where the eye lands, by the amount that
+        // puts its start about 60 % of the way up.
+        val lift = (viewport * 0.6f) - hit.offset
+        if (lift > 0f) tracedScrollBy(source, -lift)
+        val after = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == key }
+        AppLogger.info("ChatCalm", "scrollToRowKey lifted=${-lift} now=${after?.offset}")
+        true
+    }
 
     val scrollToPreviousUserTurn: suspend () -> Unit = scrollToPreviousUserTurn@{
         val info = listState.layoutInfo
@@ -2689,6 +2760,9 @@ fun ChatScreen(
                             com.openminis.app.ui.browser.BrowserExternalSchemeHandler
                                 .Origin.USER_INITIATED,
                         )
+                is ChatLinkAction.MissingFile -> android.widget.Toast.makeText(
+                    context, context.getString(R.string.chat_file_unavailable), android.widget.Toast.LENGTH_LONG,
+                ).show()
                 is ChatLinkAction.Web -> previewUrl = action.url
             }
         }
@@ -2792,6 +2866,83 @@ fun ChatScreen(
         // map (which is last-writer-wins across sessions).
         LocalMarkdownSessionId provides sessionId,
     ) {
+    // [T-android-chat-calm] Task actions shared by the inline task line and the
+    // capsule sheet. Same calls as the developer-mode card's buttons.
+    val openCalmTask: (CalmTask) -> Unit = { task ->
+        val childId = task.childSessionId
+        if (childId != null) onOpenAgentTranscript(childId) else viewModel.openToolDetail(task.block.id)
+    }
+    val resumeCalmTask: (CalmTask) -> Boolean = { task ->
+        val outcome = viewModel.resumeInterruptedFromCard(task.block)
+        val note = when (outcome) {
+            ChatViewModel.CardResume.STARTED -> null
+            ChatViewModel.CardResume.QUEUED -> R.string.helper_resume_queued
+            ChatViewModel.CardResume.REFUSED -> R.string.helper_resume_failed
+        }
+        note?.let {
+            android.widget.Toast.makeText(context, context.getString(it), android.widget.Toast.LENGTH_SHORT).show()
+        }
+        outcome != ChatViewModel.CardResume.REFUSED
+    }
+    val startCalmTask: (CalmTask) -> Unit = { task ->
+        if (!viewModel.startNeverStartedDelegation(task.block)) {
+            android.widget.Toast.makeText(
+                context, context.getString(R.string.helper_start_failed), android.widget.Toast.LENGTH_SHORT,
+            ).show()
+        }
+    }
+    if (showBackgroundTasksSheet) {
+        BackgroundTasksSheet(
+            tasks = calmTasks,
+            onDismiss = { showBackgroundTasksSheet = false },
+            onOpen = { showBackgroundTasksSheet = false; openCalmTask(it) },
+            onStop = { stopBackgroundTask(context, it.block) },
+            onResume = resumeCalmTask,
+            onStart = startCalmTask,
+        )
+    }
+    // The sheet belongs to the everyday chat; switching to developer mode closes it.
+    LaunchedEffect(developerMode) { if (developerMode) showBackgroundTasksSheet = false }
+    // [T-android-chat-calm-polish] Say which chat is on screen, so a task that
+    // finishes while the person is elsewhere (another tab, another app) is
+    // announced, and one that finishes in front of them is not.
+    val presenceLifecycle = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    DisposableEffect(presenceLifecycle, sessionId) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            when (event) {
+                androidx.lifecycle.Lifecycle.Event.ON_RESUME -> ChatScreenPresence.resumed(sessionId)
+                androidx.lifecycle.Lifecycle.Event.ON_PAUSE -> ChatScreenPresence.paused(sessionId)
+                else -> Unit
+            }
+        }
+        presenceLifecycle.lifecycle.addObserver(observer)
+        if (presenceLifecycle.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) {
+            ChatScreenPresence.resumed(sessionId)
+        }
+        onDispose {
+            presenceLifecycle.lifecycle.removeObserver(observer)
+            ChatScreenPresence.paused(sessionId)
+        }
+    }
+    // [T-android-chat-calm-polish] The first time something goes to the
+    // background, ask once (Android 13+) whether Minis may say when it is done.
+    // Declining is final here: the system remembers, and so do we.
+    val taskNoticePermission = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission(),
+    ) { granted -> AppLogger.info("ChatCalm", "task notice permission granted=$granted") }
+    LaunchedEffect(calmCapsule.active > 0) {
+        if (calmCapsule.active == 0 || android.os.Build.VERSION.SDK_INT < 33) return@LaunchedEffect
+        val perm = android.Manifest.permission.POST_NOTIFICATIONS
+        if (androidx.core.content.ContextCompat.checkSelfPermission(context, perm) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) return@LaunchedEffect
+        if (!ChatTaskNoticeAsk.shouldAsk(context)) return@LaunchedEffect
+        ChatTaskNoticeAsk.markAsked(context)
+        runCatching { taskNoticePermission.launch(perm) }
+    }
+    // Queued bubbles that open a run get the "等 Minis 说完再发" label.
+    val calmQueuedRunStarts = remember(messages) { queuedRunStarts(messages) }
+    val calmDelegateChildIds = remember(calmTasks) { calmTasks.mapNotNullTo(HashSet()) { it.childSessionId } }
     Scaffold(
         containerColor = ChatColors.background,
         contentWindowInsets = WindowInsets(0),
@@ -2871,6 +3022,9 @@ fun ChatScreen(
                             val topBarSoul by com.openminis.app.agent.SoulStore
                                 .cachedMetadata.collectAsState()
                             val displayTitle = when {
+                                // [T-android-chat-calm] Just "Minis" in the everyday chat.
+                                isMainConversation && !developerMode -> topBarSoul.name.ifBlank { "Minis" }
+                                isMainConversation -> topBarSoul.name.ifBlank { "Minis" } + " · " + stringResource(R.string.main_conversation)
                                 showChatTitlePill
                                     && sessionTitle.isNotBlank()
                                     && sessionTitle != "New Chat" -> sessionTitle
@@ -2899,6 +3053,9 @@ fun ChatScreen(
                             // provider/model. Tap opens the model picker —
                             // separated from the title above so tapping the
                             // title rows opens the rename sheet instead.
+                            // [T-android-chat-calm] Developer mode only; the
+                            // everyday chat reaches the picker from the ⋯ menu.
+                            if (ChatPresentation.showsModelSubtitle(developerMode)) {
                             Column(
                                 horizontalAlignment = Alignment.CenterHorizontally,
                                 modifier = Modifier
@@ -3133,6 +3290,33 @@ fun ChatScreen(
                                     }
                                 }
                             }
+                            } else {
+                                // [T-android-chat-calm] The model rows give way to
+                                // the background capsule, shown only while
+                                // something is running or was interrupted.
+                                // [T-android-chat-calm-polish] It fades and
+                                // folds in and out instead of popping, keeping
+                                // its last words while it leaves.
+                                val capsuleShown = ChatPresentation.showsBackgroundCapsule(developerMode, calmCapsule)
+                                var lastShownCapsule by remember { mutableStateOf(calmCapsule) }
+                                if (capsuleShown) lastShownCapsule = calmCapsule
+                                val reduceMotion = rememberReduceMotion()
+                                androidx.compose.animation.AnimatedVisibility(
+                                    visible = capsuleShown,
+                                    enter = if (reduceMotion) androidx.compose.animation.EnterTransition.None else
+                                        androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(200)) +
+                                            androidx.compose.animation.expandVertically(androidx.compose.animation.core.tween(200)),
+                                    exit = if (reduceMotion) androidx.compose.animation.ExitTransition.None else
+                                        androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(160)) +
+                                            androidx.compose.animation.shrinkVertically(androidx.compose.animation.core.tween(200)),
+                                ) {
+                                    BackgroundCapsuleChip(
+                                        capsule = lastShownCapsule,
+                                        onClick = { showBackgroundTasksSheet = true },
+                                        modifier = Modifier.padding(top = 3.dp),
+                                    )
+                                }
+                            }
                         }
                     }
                 },
@@ -3140,7 +3324,11 @@ fun ChatScreen(
                     // [T-android-tablet-split] See `isTwoPane`.
                     if (!isTwoPane) {
                         IconButton(onClick = onBack) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                            if (isMainConversation) {
+                                Icon(Icons.Outlined.History, contentDescription = stringResource(R.string.chat_history))
+                            } else {
+                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                            }
                         }
                     } else if (onToggleSidebar != null) {
                         // [T-android-tablet-sidebar-collapse] The slot the back
@@ -3224,6 +3412,46 @@ fun ChatScreen(
                             expanded = showChatMenu,
                             onDismissRequest = { showChatMenu = false },
                         ) {
+                            if (isMainConversation) {
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.chat_history)) },
+                                    onClick = { showChatMenu = false; onBack() },
+                                    leadingIcon = { MenuItemIcon(Icons.Outlined.History) },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.settings_title)) },
+                                    onClick = { showChatMenu = false; onOpenSettings() },
+                                    leadingIcon = { MenuItemIcon(Icons.Outlined.Settings) },
+                                )
+                                MinisMenuDivider()
+                            }
+                            // [T-android-chat-calm] The model rows under the
+                            // title are developer-mode only; switching model
+                            // and thinking stays one tap away here.
+                            if (!ChatPresentation.showsModelSubtitle(developerMode)) {
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            stringResource(R.string.calm_menu_model) +
+                                                (modelName.takeIf { it.isNotEmpty() }?.let { " · $it" } ?: ""),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    },
+                                    onClick = { showChatMenu = false; showModelPicker = true },
+                                    leadingIcon = { MenuItemIcon(Icons.Outlined.Layers) },
+                                )
+                                if (viewModel.availableThinkingLevels.isNotEmpty() &&
+                                    (viewModel.thinkingLevel.value.isEnabled || viewModel.currentModelSupportsReasoning)
+                                ) {
+                                    DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.thinking_level_sheet_title)) },
+                                        onClick = { showChatMenu = false; showThinkingLevelSheet = true },
+                                        leadingIcon = { MenuItemIcon(Icons.Outlined.Psychology) },
+                                    )
+                                }
+                                MinisMenuDivider()
+                            }
                             // [T-android-memory-enabled-minisconfig] Gate the
                             // "Memories in Session" item below on the session's
                             // live memoryEnabled — when memory is off the entry
@@ -3621,7 +3849,7 @@ fun ChatScreen(
                 // already reserves visualOverlayHeight (65dp) + buffer and
                 // was not part of the report; keep its +14 buffer.
                 val bottomReserve =
-                    if (hasFloatingTools) visualOverlayHeight + 14.dp else 20.dp
+                    if (hasFloatingTools && developerMode) visualOverlayHeight + 14.dp else 20.dp
                 // T174: when bottomReserve changes (toolbar appearing /
                 // disappearing or thumbnail height shift), re-pin to bottom
                 // if we are currently following. Without this, the new
@@ -3701,7 +3929,7 @@ fun ChatScreen(
                 // scope. The flatten still runs per token (cheap-ish; ran
                 // before too), but the rebuild stays off the main UI
                 // composable's invalidation list.
-                LaunchedEffect(messages, sessionId) {
+                LaunchedEffect(messages, sessionId, developerMode) {
                     // [T-android-stream-pipeline-incremental] Frozen/live split.
                     //
                     // `messages` is CONSTANT within this effect (the effect is
@@ -3868,7 +4096,11 @@ fun ChatScreen(
                                     buildFlatChatItems(merged, null, fromIndex = splitIdx, seedKeys = frozenKeys)
                                 }
                             }
-                            flatItems = if (liveRows.isEmpty()) frozenRows else frozenRows + liveRows
+                            val builtRows = if (liveRows.isEmpty()) frozenRows else frozenRows + liveRows
+                            // [T-android-chat-calm] The everyday chat drops rows
+                            // it would draw as nothing (tool steps, usage,
+                            // callbacks its task line already reports).
+                            flatItems = if (developerMode) builtRows else calmVisibleRows(builtRows)
                             // [T-android-fab-up-anr] Publish where each user
                             // bubble sits so scrollToPreviousUserTurn can find
                             // an off-screen target without scrolling onto it.
@@ -3909,6 +4141,30 @@ fun ChatScreen(
                             com.openminis.app.diagnostics.StreamPerfMonitor.turnEnd()
                         }
                     }
+                }
+                // [T-android-chat-calm-polish] Each task's result title row,
+                // for the task line's "看结果".
+                val calmResultKeys = remember(flatItems, developerMode) {
+                    if (developerMode) emptyMap() else resultHeaderKeysByChild(flatItems)
+                }
+                // [T-android-chat-calm-polish] Opened from a task-done
+                // notification: land on that task's result once its row is in
+                // the list. If it never shows up (trimmed history), the newest
+                // rows are the honest fallback.
+                val resultFocus by ChatResultFocus.pending.collectAsState()
+                LaunchedEffect(resultFocus, flatItems) {
+                    val req = resultFocus ?: return@LaunchedEffect
+                    if (req.sessionId != sessionId || flatItems.isEmpty()) return@LaunchedEffect
+                    val key = resultRowKeyFor(flatItems, req.childSessionId)
+                    if (key != null) {
+                        kotlinx.coroutines.delay(120)
+                        if (scrollToRowKey("NOTICE-FOCUS", key)) { ChatResultFocus.consume(req); return@LaunchedEffect }
+                    }
+                    // Restarted (and so cancelled) whenever the rows change;
+                    // only a list that stays without the row reaches this.
+                    kotlinx.coroutines.delay((6_000L - (System.currentTimeMillis() - req.atMs)).coerceAtLeast(0L))
+                    ChatResultFocus.consume(req)
+                    tracedScrollToItem("NOTICE-FOCUS/fallback", 0, 0)
                 }
                 // T304: when a new tool-use item appears at the trailing
                 // edge (head of flatItems with reverseLayout=true), pin
@@ -4465,6 +4721,8 @@ fun ChatScreen(
                                 onWithdraw = if (item.message.isQueued) {
                                     { safeMutate { viewModel.withdrawQueuedMessage(item.message.id) } }
                                 } else null,
+                                calm = !developerMode,
+                                showQueuedLabel = originalMessageId(item.message.id) in calmQueuedRunStarts,
                                 onPreviewFile = { uri, name ->
                                     // T150: turn the persisted file:// URI back
                                     // into a FileItem and hand off to the host
@@ -4487,8 +4745,20 @@ fun ChatScreen(
                                 },
                             )
                             } // close UserBubble SideEffect + UserMessageBubble block
-                            is FlatChatItem.AssistantHeader -> AssistantHeader()
-                            is FlatChatItem.AssistantText -> BoundsTrackedBlock(
+                            // [T-android-chat-calm-polish] The everyday chat
+                            // names no speaker: replies sit on the left, the
+                            // person's bubbles on the right, and a result says
+                            // where it came from with its own title line. The
+                            // row keeps its slot as the turn's top spacing.
+                            is FlatChatItem.AssistantHeader -> if (developerMode) AssistantHeader() else Spacer(Modifier.height(10.dp))
+                            is FlatChatItem.AssistantText -> Column(Modifier.fillMaxWidth()) {
+                            // [T-android-chat-calm] Paragraphs that are only file
+                            // links give way to the cards under the text.
+                            val calm = if (!developerMode && !item.isStreaming) {
+                                remember(item.block.content) { calmText(item.block.content) }
+                            } else null
+                            val textContent = calm?.text ?: item.block.content
+                            if (textContent.isNotBlank()) BoundsTrackedBlock(
                                 messageId = item.messageId,
                                 slotKey = "text:${item.block.id}",
                                 markdown = item.messageMarkdown,
@@ -4497,7 +4767,7 @@ fun ChatScreen(
                                 // assistant text before feeding the markdown parser, which
                                 // is the GC-storm hotspot for legacy sessions.
                                 LargeContentGuard(
-                                    content = item.block.content,
+                                    content = textContent,
                                     isStreaming = item.isStreaming,
                                     stableKey = "text:${item.messageId}:${item.block.id}",
                                 ) {
@@ -4505,7 +4775,7 @@ fun ChatScreen(
                                         selectionController.rememberMessageMarkdown(item.messageId, item.messageMarkdown)
                                     }
                                     StreamingMarkdownText(
-                                        content = item.block.content,
+                                        content = textContent,
                                         isStreaming = item.isStreaming,
                                         shardId = TextShardId(
                                             messageId = item.messageId,
@@ -4514,13 +4784,31 @@ fun ChatScreen(
                                     )
                                 }
                             }
-                            is FlatChatItem.AssistantMarkdownBlock -> BoundsTrackedBlock(
+                            // [T-android-chat-calm] Files the reply links to,
+                            // as cards: tap to view in the app, or share.
+                            if (calm != null) {
+                                CalmFileCards(
+                                    markdown = item.block.content,
+                                    sessionId = viewModel.currentSessionId,
+                                    onOpen = urlClickHandler,
+                                    removedLinkUrls = calm.removedLinkUrls,
+                                )
+                            }
+                            }
+                            is FlatChatItem.AssistantMarkdownBlock -> Column(Modifier.fillMaxWidth()) {
+                            // [T-android-chat-calm] Paragraphs that are only file
+                            // links give way to the cards under the text.
+                            val calm = if (!developerMode && !item.isStreaming) {
+                                remember(item.rawText) { calmText(item.rawText) }
+                            } else null
+                            val mdText = calm?.text ?: item.rawText
+                            if (mdText.isNotBlank()) BoundsTrackedBlock(
                                 messageId = item.messageId,
                                 slotKey = "mdblock:${item.parentBlockId}:${item.blockIndex}",
                                 markdown = item.messageMarkdown,
                             ) {
                                 LargeContentGuard(
-                                    content = item.rawText,
+                                    content = mdText,
                                     isStreaming = item.isStreaming,
                                     stableKey = "mdblock:${item.messageId}:${item.parentBlockId}:${item.blockIndex}",
                                 ) {
@@ -4528,7 +4816,7 @@ fun ChatScreen(
                                         selectionController.rememberMessageMarkdown(item.messageId, item.messageMarkdown)
                                     }
                                     MarkdownBlock(
-                                        rawText = item.rawText,
+                                        rawText = mdText,
                                         isStreaming = item.isStreaming,
                                         shardId = TextShardId(
                                             messageId = item.messageId,
@@ -4536,6 +4824,15 @@ fun ChatScreen(
                                         ),
                                     )
                                 }
+                            }
+                            if (calm != null) {
+                                CalmFileCards(
+                                    markdown = item.rawText,
+                                    sessionId = viewModel.currentSessionId,
+                                    onOpen = urlClickHandler,
+                                    removedLinkUrls = calm.removedLinkUrls,
+                                )
+                            }
                             }
                             is FlatChatItem.AssistantThinking -> {
                                 // T300: hide Deep Thinking block when the user
@@ -4573,10 +4870,33 @@ fun ChatScreen(
                             )
                             // [T-p2-delegate-render] A helper block gets its
                             // own card; everything else keeps the pill.
-                            is FlatChatItem.AgentCallbackCard -> AgentCallbackCard(
-                                callback = item.callback,
-                                onTap = { callbackDetailBlock = item.callback.syntheticBlock() },
-                            )
+                            is FlatChatItem.AgentCallbackCard -> when (
+                                ChatPresentation.callbackRow(
+                                    kind = calmResultKind(item.callback),
+                                    hasDelegateBlock = item.callback.childSessionId in calmDelegateChildIds,
+                                    developerMode = developerMode,
+                                )
+                            ) {
+                                CallbackRowStyle.CARD -> AgentCallbackCard(
+                                    callback = item.callback,
+                                    onTap = { callbackDetailBlock = item.callback.syntheticBlock() },
+                                )
+                                // [T-android-chat-calm-polish] The reply this
+                                // result started sits under a title line naming
+                                // the task, so it no longer reads as the tail
+                                // of whatever was said last.
+                                CallbackRowStyle.RESULT_HEADER -> CalmResultHeader(
+                                    title = item.callback.title.ifBlank { stringResource(R.string.helper_label) },
+                                    kind = calmResultKind(item.callback),
+                                    onOpen = {
+                                        val childId = item.callback.childSessionId
+                                        if (childId != null) onOpenAgentTranscript(childId)
+                                        else callbackDetailBlock = item.callback.syntheticBlock()
+                                    },
+                                )
+                                // A zero-height item still has to be emitted.
+                                CallbackRowStyle.HIDDEN -> Spacer(Modifier.height(0.dp))
+                            }
                             // [T-android-subagent-control-capsule] A control call
                             // (status/steer/cancel/resume) is the model managing
                             // agents it already started, so it does NOT get a
@@ -4587,8 +4907,47 @@ fun ChatScreen(
                             // above all) are readable in the detail sheet.
                             // Replaces the bespoke one-line row, which read as a
                             // section divider and could not be opened.
-                            is FlatChatItem.AssistantToolUse -> if (
-                                com.openminis.app.agent.jobs.HelperRunner.isSubAgentToolName(item.block.toolName) &&
+                            is FlatChatItem.AssistantToolUse -> {
+                            val isSubAgentTool = com.openminis.app.agent.jobs.HelperRunner.isSubAgentToolName(item.block.toolName)
+                            val toolRetry: (() -> Unit)? =
+                                if (item.isLastCancelled && !isStreaming && !canResume) ({ safeMutate { viewModel.retryLast() } }) else null
+                            val toolRowStyle = ChatPresentation.toolRow(
+                                isSubAgentTool = isSubAgentTool,
+                                isControlCall = isSubAgentTool && helperControlSummary(item.block) != null,
+                                isRunning = item.block.toolStatus == ToolBlockStatus.RUNNING ||
+                                    item.block.toolStatus == ToolBlockStatus.PENDING ||
+                                    item.block.toolStatus == ToolBlockStatus.STREAMING,
+                                retryOffered = toolRetry != null,
+                                developerMode = developerMode,
+                            )
+                            when (toolRowStyle) {
+                            // [T-android-chat-calm] Everyday chat: a background
+                            // task is one quiet line; ordinary tool steps say
+                            // only what is happening right now, then vanish.
+                            ToolRowStyle.TASK_LINE -> {
+                                val info = remember(item.block.content, item.block.toolStatus, item.block.toolTitle) {
+                                    parseHelperBlock(item.block)
+                                }
+                                val task = CalmTask(item.block, info.title, calmTaskState(info), info.childSessionId, item.block.startTimeMs)
+                                // [T-android-chat-calm-polish] The result came
+                                // back further down: offer the jump to it.
+                                val resultKey = info.childSessionId?.let { calmResultKeys[it] }
+                                CalmTaskLine(
+                                    task = task,
+                                    onOpen = { openCalmTask(task) },
+                                    onStop = { stopBackgroundTask(context, item.block) },
+                                    onResume = { resumeCalmTask(task) },
+                                    onStart = { startCalmTask(task) },
+                                    onSeeResult = if (resultKey != null && !task.state.isActive && !task.state.needsUser) {
+                                        { coroutineScope.launch { scrollToRowKey("SEE-RESULT", resultKey) } }
+                                    } else null,
+                                )
+                            }
+                            ToolRowStyle.ACTIVITY_LINE -> CalmActivityLine(item.block.toolName)
+                            ToolRowStyle.RETRY_LINE -> CalmRetryLine(onRetry = { toolRetry?.invoke() })
+                            ToolRowStyle.HIDDEN -> Spacer(Modifier.height(0.dp))
+                            ToolRowStyle.HELPER_CARD, ToolRowStyle.TOOL_PILL -> if (
+                                isSubAgentTool &&
                                 helperControlSummary(item.block) != null
                             ) {
                                 ToolCallPill(
@@ -4604,13 +4963,8 @@ fun ChatScreen(
                                 onStop = {
                                     val childId = com.openminis.app.agent.jobs.HelperRunner.childSessionIdFrom(item.block.content)
                                     val job = childId?.let { com.openminis.app.agent.jobs.AgentJobRegistry.jobForSession(it) }
-                                    // [T-android-stop-sibling-subagent] Stop the whole
-                                    // fan-out, not just this card's job: the siblings are
-                                    // the same piece of work and the user cannot see them.
                                     if (job != null && job.isActive) {
-                                        com.openminis.app.agent.jobs.AgentJobRegistry.cancelSiblings(
-                                            childId!!, "user-stop-block",
-                                        )
+                                        com.openminis.app.agent.jobs.AgentJobRegistry.cancel(job.id, "user-stop-task")
                                     }
                                     // [T-android-vm-store-child-tag-survives-evict] CHILD pool: an
                                     // evicted child must not come back as NORMAL here.
@@ -4662,7 +5016,7 @@ fun ChatScreen(
                                 // when the block is RUNNING/STREAMING — see
                                 // ToolCallPill `isRunning && onStop != null`
                                 // — so passing it unconditionally is safe.
-                                onStop = { viewModel.cancelStream() },
+                                onStop = { viewModel.cancelStream(stopBackgroundTasks = !isMainConversation) },
                                 onOpenTerminalWithCommand = onOpenTerminalWithCommand,
                                 // T261: route detail open through ViewModel so
                                 // the sheet is hoisted out of LazyColumn item
@@ -4697,6 +5051,8 @@ fun ChatScreen(
                                     ).show()
                                 },
                             )
+                            }
+                            }
                             is FlatChatItem.AssistantInfo -> FallbackInfoBlock(
                                 block = item.block,
                                 // Only the compact-divider info block should
@@ -4708,7 +5064,7 @@ fun ChatScreen(
                                     { viewModel.revertCompact() }
                                 } else null,
                             )
-                            is FlatChatItem.AssistantTyping -> TypingIndicator()
+                            is FlatChatItem.AssistantTyping -> if (developerMode) TypingIndicator() else CalmWaitLine(item.messageId)
                             // [T-android-usage-capsule-time] Same composable the
                             // classic renderer uses, so the two paths cannot drift.
                             // [T-android-usage-capsule-style] Hidden until the
@@ -4716,7 +5072,10 @@ fun ChatScreen(
                             // matching iOS. The item still occupies its slot so
                             // there is something to tap; only the capsule inside
                             // it fades in and out.
-                            is FlatChatItem.AssistantUsage -> {
+                            // [T-android-chat-calm] Usage is developer-mode only.
+                            is FlatChatItem.AssistantUsage -> if (!ChatPresentation.showsUsage(developerMode)) {
+                                Spacer(Modifier.height(0.dp))
+                            } else {
                                 val msgId = originalMessageId(item.messageId)
                                 val shown = msgId in revealedUsageIds
                                 Box(
@@ -4835,6 +5194,8 @@ fun ChatScreen(
                 )
                 MinisMarkdownTextToolbarHost(markdownToolbar)
                 // MinisTextKit floating toolbar — driven by selectionController.
+                val labelShareReply = stringResource(R.string.calm_reply_share)
+                val labelRegenerateReply = stringResource(R.string.calm_reply_regenerate)
                 MinisSelectionToolbarHost(
                     controller = selectionController,
                     // Clamp the menu's vertical position inside the
@@ -4893,6 +5254,28 @@ fun ChatScreen(
                         onReadFromStart = if (isStreaming) null else {
                             { fullText -> selectionReader.speak(fullText) }
                         },
+                        // [T-android-chat-calm-polish] Long-press on a reply:
+                        // share it whole, and answer the latest question
+                        // again (user bubbles already offer retry / edit).
+                        replyActions = { msgId ->
+                            val id = msgId?.substringBefore('#')
+                            val msg = id?.let { mid -> messages.firstOrNull { it.id == mid } }
+                            if (msg == null || msg.role != "assistant") emptyList() else buildList {
+                                val md = selectionController.selectionMessageMarkdown()
+                                if (!md.isNullOrBlank()) add(SelectionReplyAction(labelShareReply) {
+                                    val send = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                                        type = "text/plain"
+                                        putExtra(android.content.Intent.EXTRA_TEXT, MarkdownClipboard.markdownToPlainText(md))
+                                    }
+                                    runCatching { context.startActivity(android.content.Intent.createChooser(send, null)) }
+                                })
+                                val target = if (isStreaming) null else regenerateTargetFor(messages, msg.id)
+                                if (target != null) add(SelectionReplyAction(labelRegenerateReply) {
+                                    coroutineScope.launch { tracedScrollToItem("REGENERATE-REPLY", 0, 0) }
+                                    safeMutate { viewModel.retryFromMessage(target) }
+                                })
+                            }
+                        },
                     ),
                 )
                 // iOS-style selection handle dots, one at each endpoint.
@@ -4931,7 +5314,9 @@ fun ChatScreen(
                 // [T-p2-agent-series] The agent block is just another entry of
                 // the floating tool bar (its background block stays RUNNING);
                 // the standalone capsule is gone.
-                if (lastToolBlocks.isNotEmpty()) {
+                // [T-android-chat-calm] The floating bar is developer-mode only.
+                val showsFloatingBar = ChatPresentation.showsFloatingToolBar(developerMode, lastToolBlocks.isNotEmpty())
+                if (showsFloatingBar) {
                     Box(
                         modifier = Modifier
                             .align(Alignment.BottomCenter)
@@ -4964,7 +5349,7 @@ fun ChatScreen(
                             toolBlocks = lastToolBlocks,
                             // T14: per-card stop on the floating bar — same
                             // global cancel as the message-list pill button.
-                            onStop = { viewModel.cancelStream() },
+                            onStop = { viewModel.cancelStream(stopBackgroundTasks = !isMainConversation) },
                             onOpenTerminalWithCommand = onOpenTerminalWithCommand,
                             // T261: route detail open through the same VM
                             // state as in-list pills so both surfaces share
@@ -4999,7 +5384,7 @@ fun ChatScreen(
                 val upFabVisible = messages.isNotEmpty() && !isNearBottom.value
                 val downFabVisible =
                     userScrolledAway && contentOverflows.value && messages.isNotEmpty()
-                val fabBaseDp = if (lastToolBlocks.isNotEmpty()) 80.dp else 8.dp
+                val fabBaseDp = if (showsFloatingBar) 80.dp else 8.dp
                 val fabStackTopDp = when {
                     upFabVisible -> fabBaseDp + 46.dp + 36.dp
                     downFabVisible -> fabBaseDp + 36.dp
@@ -5102,7 +5487,7 @@ fun ChatScreen(
                 // spacing). Tapping walks BACK one user turn at a time rather
                 // than jumping to the oldest message.
                 if (messages.isNotEmpty() && !isNearBottom.value) {
-                    val upBaseBottom = if (lastToolBlocks.isNotEmpty()) 80.dp else 8.dp
+                    val upBaseBottom = if (showsFloatingBar) 80.dp else 8.dp
                     androidx.compose.material3.FilledIconButton(
                         onClick = {
                             // [T-android-updown-fab-asymmetry] Arm the same flag a
@@ -5144,7 +5529,7 @@ fun ChatScreen(
                 }
 
                 if (userScrolledAway && contentOverflows.value && messages.isNotEmpty()) {
-                    val fabBottomPadding = if (lastToolBlocks.isNotEmpty()) 80.dp else 8.dp
+                    val fabBottomPadding = if (showsFloatingBar) 80.dp else 8.dp
                     androidx.compose.material3.FilledIconButton(
                         onClick = {
                             // [T-android-scroll-fab-down-stuck] Clear the
@@ -7300,7 +7685,7 @@ fun ChatScreen(
                         // linger after everything stopped.
                         val agentWorkParents by AgentJobRegistry.parentsWithAgentWork.collectAsState()
                         val sessionBusy = isStreaming ||
-                            viewModel.currentSessionId in agentWorkParents
+                            (!isMainConversation && viewModel.currentSessionId in agentWorkParents)
                         val showStop = sessionBusy && !hasContent
                         if (showStop) {
                             Box(
@@ -7308,12 +7693,12 @@ fun ChatScreen(
                                     .size(38.dp)
                                     .background(Color(0xFFFF3B30), CircleShape)
                                     .clip(CircleShape)
-                                    .clickable { viewModel.cancelStream() },
+                                    .clickable { viewModel.cancelStream(stopBackgroundTasks = !isMainConversation) },
                                 contentAlignment = Alignment.Center,
                             ) {
                                 Icon(
                                     Icons.Default.Stop,
-                                    contentDescription = "Stop",
+                                    contentDescription = if (isMainConversation) stringResource(R.string.stop_current_reply) else "Stop",
                                     tint = Color.White,
                                     modifier = Modifier.size(20.dp),
                                 )
@@ -7491,7 +7876,7 @@ fun ChatScreen(
                     isDestructive = true,
                     onConfirm = {
                         showNewChatStopDialog = false
-                        viewModel.cancelStream()
+                        viewModel.cancelStream(stopBackgroundTasks = !isMainConversation)
                         onNewChat()
                     },
                 )

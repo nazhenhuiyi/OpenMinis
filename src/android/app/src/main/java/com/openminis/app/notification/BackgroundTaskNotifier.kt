@@ -69,6 +69,11 @@ class BackgroundTaskNotifier(
     fun notifyTaskCompleted(sessionId: String, isError: Boolean = false) {
         if (!backgroundSettings.taskNotificationsEnabled.value) return
         if (isAppForeground()) return
+        // [T-android-chat-calm-polish] The turn that just ended is the reply
+        // to a background task that TaskResultNotifier already announced by
+        // name ("整理采购单 · 做完了"); a second, generic "task completed" for
+        // the same thing is noise.
+        if (TaskResultNotifier.spokeRecentlyFor(sessionId)) return
 
         scope.launch {
             try {

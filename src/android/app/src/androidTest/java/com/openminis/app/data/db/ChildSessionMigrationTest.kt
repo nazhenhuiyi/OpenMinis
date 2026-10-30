@@ -33,8 +33,8 @@ class ChildSessionMigrationTest {
     fun upgrade12to13_existingRowsReadNullParent() {
         helper.createDatabase(dbName, 12).use { db ->
             db.execSQL(
-                "INSERT INTO sessions (id, title, model_id, created_at, updated_at, memory_enabled) " +
-                    "VALUES ('s1', 'top', 'm', 1, 1, 1)"
+                "INSERT INTO sessions (id, title, model_id, created_at, updated_at, memory_enabled, edit_count) " +
+                    "VALUES ('s1', 'top', 'm', 1, 1, 1, 0)"
             )
         }
         helper.runMigrationsAndValidate(dbName, 13, true, AppDatabase.MIGRATION_12_13).use { db ->
@@ -49,11 +49,13 @@ class ChildSessionMigrationTest {
     fun downgrade13to12_keepsChildColumnsAndValues() {
         helper.createDatabase(dbName, 13).use { db ->
             db.execSQL(
-                "INSERT INTO sessions (id, title, model_id, created_at, updated_at, memory_enabled, parent_session_id, parent_tool_use_id) " +
-                    "VALUES ('c1', 'Helper · x', 'm', 1, 1, 0, 'p1', 'tu1')"
+                "INSERT INTO sessions (id, title, model_id, created_at, updated_at, memory_enabled, edit_count, parent_session_id, parent_tool_use_id) " +
+                    "VALUES ('c1', 'Helper · x', 'm', 1, 1, 0, 0, 'p1', 'tu1')"
             )
-        }
-        helper.runMigrationsAndValidate(dbName, 12, true, AppDatabase.MIGRATION_13_12).use { db ->
+            // The downgrade intentionally retains v13 columns. Validating
+            // against the v12 exported schema would reject that contract; test
+            // the actual migration body and retained data on the real file.
+            AppDatabase.MIGRATION_13_12.migrate(db)
             db.query("SELECT parent_session_id FROM sessions WHERE id='c1'").use { c ->
                 assertTrue(c.moveToFirst()); assertEquals("p1", c.getString(0))
             }

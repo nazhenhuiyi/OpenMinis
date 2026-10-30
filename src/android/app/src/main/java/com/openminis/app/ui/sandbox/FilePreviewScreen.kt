@@ -1240,7 +1240,7 @@ private fun buildFileAttributes(item: FileItem): List<Pair<String, String>> {
  * pick (the chooser itself launches a separate activity that wouldn't otherwise
  * be in the granted set).
  */
-private fun shareFile(context: Context, item: FileItem) {
+internal fun shareFile(context: Context, item: FileItem) {
     try {
         val authority = "${context.packageName}.fileprovider"
         val uri = FileProvider.getUriForFile(context, authority, item.file)

@@ -26,6 +26,7 @@ sealed class ChatLinkAction {
     data class SandboxFolder(val linuxPath: String) : ChatLinkAction()
     data class ExternalApp(val url: String) : ChatLinkAction()
     data class Web(val url: String) : ChatLinkAction()
+    data class MissingFile(val url: String) : ChatLinkAction()
 }
 
 object ChatLinkResolver {
@@ -51,7 +52,7 @@ object ChatLinkResolver {
         //    `PRootKernel.bindMounts` is last-writer-wins, so on a device
         //    with multiple sessions the resolver otherwise points at
         //    whichever session booted its shell most recently.
-        val hostFile = resolveSandboxFile(trimmed, scheme, sessionId, context)
+        val hostFile = runCatching { resolveSandboxFile(trimmed, scheme, sessionId, context) }.getOrNull()
         android.util.Log.w("ChatLinkDiag",
             "resolve url=${trimmed.take(200)} sid=$sessionId hostFile=${hostFile?.absolutePath} exists=${hostFile?.exists()}")
         if (hostFile != null && hostFile.exists() && !hostFile.isDirectory) {
@@ -63,6 +64,11 @@ object ChatLinkResolver {
         if (hostFile != null && hostFile.isDirectory) {
             sandboxFolderLinuxPath(trimmed, scheme, sessionId, context)
                 ?.let { return ChatLinkAction.SandboxFolder(it) }
+        }
+
+        // Local resources must not become an empty web preview when absent.
+        if (scheme == "minis" || scheme == "file" || trimmed.startsWith("/")) {
+            return ChatLinkAction.MissingFile(trimmed)
         }
 
         // T136: intent://, mailto:, tel:, geo:, market: etc. need a system

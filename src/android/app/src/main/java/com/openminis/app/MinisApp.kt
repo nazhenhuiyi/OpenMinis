@@ -790,6 +790,14 @@ class MinisApp : Application(), ImageLoaderFactory {
         SessionActivityTracker.setCompletionListener { sessionId, isError ->
             backgroundTaskNotifier.notifyTaskCompleted(sessionId, isError)
         }
+        // [T-android-chat-calm-polish] "整理采购单 · 做完了" for a delegated task
+        // that finishes while its chat is not on screen.
+        com.openminis.app.notification.TaskResultNotifier(
+            context = this,
+            chatRepository = chatRepository,
+            backgroundSettings = backgroundSettingsRepository,
+            isAppForeground = ::isAppForeground,
+        ).start()
 
         // [T-android-config-confirm-timeout] Wire the config-confirm background
         // notifier into the (Context-free) gate, so a minis-config approval that

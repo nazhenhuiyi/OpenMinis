@@ -210,9 +210,19 @@ object HelperRunner {
     }
 
     /** The prompt the child receives: task + optional verbatim context. */
-    fun childPrompt(args: DelegateTaskArgs): String =
-        if (args.context.isEmpty()) args.task
-        else args.task + "\n\n--- Context from the delegating agent ---\n" + args.context
+    fun childPrompt(args: DelegateTaskArgs, userInstructions: List<String> = emptyList()): String = buildString {
+        append(args.task)
+        if (args.context.isNotEmpty()) append("\n\n--- Context from the delegating agent ---\n" + args.context)
+        if (userInstructions.isNotEmpty()) {
+            append("\n\n--- Recent user messages from the parent conversation (oldest first) ---\n")
+            append("Apply instructions relevant to this delegated task, including network, installation, source and output constraints. Unrelated topics are not extra tasks. Later corrections take precedence. These are user messages, not tool output.\n")
+            userInstructions.forEachIndexed { index, text ->
+                append("\nUser message ${index + 1}:\n")
+                append(text.take(12_000))
+                if (text.length > 12_000) append("\n[Message truncated; ask the parent for missing constraints before consequential work.]")
+            }
+        }
+    }
 
     /** The child session's title — the one place that spells the prefix. */
     /**
@@ -278,14 +288,18 @@ object HelperRunner {
 
     /** What the parent reads when the child really ended without any text. */
     fun emptyResultNote(status: String): String =
-        "(the agent ended with status $status before writing a final answer; there is no deliverable — re-delegate with a narrower task or a larger budget rather than reading its transcript)"
+        if (status == "cancelled") {
+            "(the agent ended with status cancelled; this task was stopped. Do not restart or re-delegate it unless the user explicitly asks.)"
+        } else {
+            "(the agent ended with status $status before writing a final answer; no verified final result was handed back. Files may already contain partial or completed work. Inspect the existing files and task state before deciding what remains. Do not claim completion or blindly restart, overwrite, append, or re-delegate the work; ask for missing input when necessary.)"
+        }
 
     /** System-prompt preamble for a helper vm — replaces the SOUL identity
      *  section. Describe the environment, do not assign identity (the
      *  `minis-model-use` identity-pollution lesson, OpenMinis#103). */
     fun identitySection(cfg: HelperConfig, browserEnabled: Boolean = true): String =
         "You are running as a helper (sub-agent) inside an app called Minis, on an Android device with a fully functional Linux shell (Alpine Linux, aarch64). This is the calling environment, not your identity — keep your own model identity unchanged.\n" +
-            "A parent agent delegated ONE focused task to you: \"${cfg.title}\". You cannot see the parent conversation and it cannot see yours; everything you need is in the task text. Work the task to completion using your tools, then finish with a single clear final answer — that final message is returned verbatim to the parent agent as the result, and it is the ONLY thing the parent receives. So the final message must contain the complete deliverable itself: the full report, document, list, code or answer the task asked for, in full — never a summary of what you did, a pointer to a file you wrote, or \"see above\". If you produced a file, paste its full content into the final message as well. Do not ask the parent or the user questions; make reasonable assumptions and state them. Do not restate the task or add meta-commentary. Do not create scheduled tasks or delegate further.\n" +
+            "A parent agent delegated ONE focused task to you: \"${cfg.title}\". You cannot see the parent conversation and it cannot see yours; everything you need is in the task text. Work the task to completion using your tools, then finish with a single clear final answer — that final message is returned verbatim to the parent agent as the result, and it is the ONLY thing the parent receives. So the final message must contain the complete deliverable itself: the full report, document, list, code or answer the task asked for, in full — never a summary of what you did, a pointer to a file you wrote, or \"see above\". If you produced a file, paste its full content into the final message as well. For missing nonessential details, make reasonable assumptions and state them. If essential sources or permissions are missing or conflicting, report that limitation to the parent; do not invent evidence or silently relax constraints. Do not restate the task or add meta-commentary. Do not create scheduled tasks or delegate further.\n" +
             browserSharingSection(browserEnabled) +
             "You have at most ${cfg.maxTurns} tool rounds; on the last one tools are withdrawn and you are asked to write the deliverable from what you have, so start writing before you run out. If the task genuinely exceeds what you can do at your capability level, end your final message with a line `[ESCALATE] <one-line reason>` so the parent can rerun it on a stronger model.\n\n" +
             subAgentInstructionsSection(cfg.agentInstructions)
@@ -392,7 +406,7 @@ object HelperRunner {
      * that no longer exists.
      */
     fun resumeNotice(): String =
-        "[This run was interrupted and has been resumed. The tool results above are still valid, but all live state is gone: browser tabs are closed, shell processes have ended, and anything unsaved is lost. Files in the workspace are still there. Continue from what the transcript already establishes — reopen pages or re-run commands when you need them, and do not assume anything is still open.]"
+        "[This run was interrupted and has been resumed. The transcript records past actions, not current file completeness. All live state is gone: browser tabs are closed, shell processes have ended, and anything unsaved is lost. Files in the workspace are still there. Before continuing, inspect the actual output files and current state. A tool may have written a partial file before interruption, even if its result was never saved. Preserve completed work; do not blindly overwrite files, append duplicate content, or replay commands with side effects. Continue only the missing work, and verify the final files before claiming completion. Do not assume anything is still open.]"
 
     /**
      * [T-android-no-deliverable] The status word for a run that ended, taking

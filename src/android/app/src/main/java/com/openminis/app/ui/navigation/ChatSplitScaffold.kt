@@ -859,6 +859,7 @@ fun isDraftSessionId(id: String?): Boolean = id?.startsWith("__new__") == true
 @Composable
 fun ChatSplitScaffoldRoute(
     initialSessionId: String?,
+    mainConversation: Boolean = false,
     navController: androidx.navigation.NavHostController,
     chatRepository: com.openminis.app.data.repository.ChatRepository,
     providerRepository: com.openminis.app.data.repository.ProviderRepository,
@@ -866,36 +867,20 @@ fun ChatSplitScaffoldRoute(
     skillRepository: com.openminis.app.data.repository.SkillRepository?,
     mcpRepository: com.openminis.app.data.repository.MCPRepository?,
 ) {
-    ChatSplitScaffold(
-        initialSessionId = initialSessionId,
-        listPane = { selectedSessionId, draftPlaceholderId, onSessionSelected ->
-            com.openminis.app.ui.sessions.SessionListScreen(
-                chatRepository = chatRepository,
-                providerRepository = providerRepository,
-                // Selecting a session drives the PANE navigator, not the
-                // NavHost: in two-pane mode a push would replace the whole
-                // screen instead of swapping the detail column. In single-pane
-                // the pane navigator performs the equivalent push itself, so
-                // phone behaviour is unchanged.
-                onSessionClick = onSessionSelected,
-                onNewChat = onSessionSelected,
-                onSettingsClick = { navController.safeNavigate(Routes.SETTINGS) },
-                onAddProviderClick = { navController.safeNavigate(Routes.ADD_PROVIDER) },
-                onSelectModelsClick = { navController.safeNavigate(Routes.ONBOARDING_MODELS) },
-                onRestoreBackupClick = {
-                    navController.currentBackStackEntry?.savedStateHandle?.set(Routes.BACKUP_INITIAL_TAB_KEY, 1)
-                    navController.safeNavigate(Routes.BACKUP)
-                },
-                onTerminalClick = { navController.safeNavigate(Routes.terminal()) },
-                onRootfsClick = { navController.safeNavigate(Routes.ROOTFS_MANAGEMENT) },
-                onScheduledTasksClick = { navController.safeNavigate(Routes.SCHEDULED_TASKS) },
-                selectedSessionId = selectedSessionId,
-                // [T-android-draft-placeholder-row] Synthetic "New Chat" row,
-                // never persisted — see the listPane param docs.
-                draftPlaceholderId = draftPlaceholderId,
-            )
-        },
-        detailPane = { sessionId, onBackInPane, onNewChatInPane, onMoveToInPane,
+    val context = LocalContext.current
+    var mainId by remember { mutableStateOf<String?>(null) }
+    if (mainConversation) {
+        androidx.compose.runtime.LaunchedEffect(chatRepository) {
+            providerRepository.awaitConfigLoaded()
+            val entry = providerRepository.lastUsedVisibleEntry()
+                ?: providerRepository.newestProviderNewestTextEntry()
+            mainId = chatRepository.mainConversation(
+                entry?.model?.id ?: "unknown",
+                com.openminis.app.data.MemoryGlobalPrefs.isGlobalEnabled(context),
+            ).id
+        }
+    }
+    val detail: @Composable (String, () -> Unit, () -> Unit, (String) -> Unit, (() -> Unit)?, Boolean) -> Unit = { sessionId, onBackInPane, onNewChatInPane, onMoveToInPane,
             onToggleSidebar, sidebarCollapsed ->
             com.openminis.app.ui.chat.ChatScreen(
                 // The pane navigator's contentKey IS the session id, so a
@@ -914,7 +899,9 @@ fun ChatSplitScaffoldRoute(
                 // arrow while the list is beside it. shouldUseTwoPane() is the
                 // same window-size predicate the scaffold itself uses, so the
                 // two cannot disagree.
-                isTwoPane = shouldUseTwoPane(),
+                isTwoPane = !mainConversation && shouldUseTwoPane(),
+                isMainConversation = sessionId == com.openminis.app.data.repository.ChatRepository.MAIN_CONVERSATION_ID,
+                onOpenSettings = { navController.safeNavigate(Routes.SETTINGS) },
                 // [T-android-tablet-sidebar-collapse] Reuses the slot the back
                 // arrow vacates in two-pane, which is where the user already
                 // looks for "get me back to the list".
@@ -957,6 +944,52 @@ fun ChatSplitScaffoldRoute(
                 onModelGroupsClick = { navController.safeNavigate(Routes.MODEL_GROUPS) },
                 onEditProviderClick = { id -> navController.safeNavigate(Routes.providerDetail(id)) },
             )
+        }
+    if (mainConversation) {
+        val id = mainId
+        if (id == null) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                androidx.compose.material3.CircularProgressIndicator()
+            }
+        } else {
+            detail(id,
+                { navController.safeNavigate(Routes.CHAT_HISTORY) },
+                { navController.safeNavigate(Routes.chat(newDraftSessionId())) },
+                { target -> navController.safeNavigate(Routes.chat(target)) },
+                null, false,
+            )
+        }
+        return
+    }
+    ChatSplitScaffold(
+        initialSessionId = initialSessionId,
+        listPane = { selectedSessionId, draftPlaceholderId, onSessionSelected ->
+            com.openminis.app.ui.sessions.SessionListScreen(
+                chatRepository = chatRepository,
+                providerRepository = providerRepository,
+                // Selecting a session drives the PANE navigator, not the
+                // NavHost: in two-pane mode a push would replace the whole
+                // screen instead of swapping the detail column. In single-pane
+                // the pane navigator performs the equivalent push itself, so
+                // phone behaviour is unchanged.
+                onSessionClick = onSessionSelected,
+                onNewChat = onSessionSelected,
+                onSettingsClick = { navController.safeNavigate(Routes.SETTINGS) },
+                onAddProviderClick = { navController.safeNavigate(Routes.ADD_PROVIDER) },
+                onSelectModelsClick = { navController.safeNavigate(Routes.ONBOARDING_MODELS) },
+                onRestoreBackupClick = {
+                    navController.currentBackStackEntry?.savedStateHandle?.set(Routes.BACKUP_INITIAL_TAB_KEY, 1)
+                    navController.safeNavigate(Routes.BACKUP)
+                },
+                onTerminalClick = { navController.safeNavigate(Routes.terminal()) },
+                onRootfsClick = { navController.safeNavigate(Routes.ROOTFS_MANAGEMENT) },
+                onScheduledTasksClick = { navController.safeNavigate(Routes.SCHEDULED_TASKS) },
+                selectedSessionId = selectedSessionId,
+                // [T-android-draft-placeholder-row] Synthetic "New Chat" row,
+                // never persisted — see the listPane param docs.
+                draftPlaceholderId = draftPlaceholderId,
+            )
         },
+        detailPane = detail,
     )
 }

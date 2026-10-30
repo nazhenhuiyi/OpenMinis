@@ -300,13 +300,33 @@ internal fun UserMessageBubble(
     onCompactAbove: (() -> Unit)? = null,
     onWithdraw: (() -> Unit)? = null,
     onPreviewFile: (Uri, String) -> Unit = { _, _ -> },
+    // [T-android-chat-calm] Everyday chat: the queued label is said once above
+    // a run of queued bubbles ([showQueuedLabel]) and withdraw is a "撤回" text
+    // button before the bubble instead of a red icon after it.
+    calm: Boolean = false,
+    showQueuedLabel: Boolean = true,
 ) {
     var showMenu by remember { mutableStateOf(false) }
     val isQueued = message.isQueued
     val haptics = LocalHapticFeedback.current
+    // [T-android-chat-calm-polish] A withdrawn bubble fades out first (160 ms)
+    // and is removed after, so it visibly goes away instead of vanishing.
+    var leaving by remember(message.id) { mutableStateOf(false) }
+    val reduceMotion = rememberReduceMotion()
+    val leaveAlpha by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = if (leaving) 0f else 1f,
+        animationSpec = androidx.compose.animation.core.tween(if (reduceMotion) 0 else 160),
+        label = "withdrawFade",
+    )
+    androidx.compose.runtime.LaunchedEffect(leaving) {
+        if (!leaving) return@LaunchedEffect
+        if (!reduceMotion) kotlinx.coroutines.delay(170)
+        onWithdraw?.invoke()
+    }
 
     BoxWithConstraints(
         modifier = Modifier
+            .graphicsLayer { alpha = leaveAlpha }
             .fillMaxWidth()
             // [T-android-user-assistant-spacing-16] 14dp top when stacked on
             // another user bubble (User→User, left intentionally larger to
@@ -369,6 +389,22 @@ internal fun UserMessageBubble(
                     )
                 }
 
+                if (isQueued && !calm) {
+                    Text(
+                        text = stringResource(R.string.chat_message_not_sent),
+                        color = ChatColors.secondaryText,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                } else if (isQueued && showQueuedLabel) {
+                    val soul by com.openminis.app.agent.SoulStore.cachedMetadata.collectAsState()
+                    Text(
+                        text = stringResource(R.string.calm_queued_label, soul.name.trim().ifEmpty { "Minis" }),
+                        color = ChatColors.tertiaryText,
+                        fontSize = CalmSpec.CaptionSize,
+                        lineHeight = CalmSpec.CaptionHeight,
+                        modifier = Modifier.padding(end = CalmSpec.Space1),
+                    )
+                }
                 if (message.content.isNotBlank()) {
                     // Queued: transparent bg + dashed border + dimmed text +
                     // a red withdraw button alongside. Mirrors iOS
@@ -411,6 +447,14 @@ internal fun UserMessageBubble(
                         // Long-press is captured on the outer Box (above) so
                         // press coords share a LayoutCoordinates space with the
                         // menu anchor.
+                        if (isQueued && onWithdraw != null && calm) {
+                            // Same outlined pill as a task line's "停止".
+                            CalmTaskAction(
+                                text = stringResource(R.string.calm_queued_withdraw),
+                                style = CalmActionStyle.OUTLINED,
+                                enabled = !leaving,
+                            ) { leaving = true }
+                        }
                         androidx.compose.foundation.text.selection.DisableSelection {
                             // T167: when queued, leave room for the 44dp cancel
                             // IconButton sibling. Without weight(1f, fill=false)
@@ -440,7 +484,7 @@ internal fun UserMessageBubble(
                                 )
                             }
                         }
-                        if (isQueued && onWithdraw != null) {
+                        if (isQueued && onWithdraw != null && !calm) {
                             // T52: bring the withdraw target up to Material's
                             // 44dp recommended minimum so it can be hit
                             // reliably from the soft-IME-keyboard region;
@@ -453,7 +497,7 @@ internal fun UserMessageBubble(
                             ) {
                                 Icon(
                                     imageVector = Icons.Filled.Cancel,
-                                    contentDescription = "Withdraw queued message",
+                                    contentDescription = stringResource(R.string.chat_withdraw_queued),
                                     tint = Color(0xFFFF3B30),
                                     modifier = Modifier.size(24.dp),
                                 )
